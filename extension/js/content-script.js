@@ -720,15 +720,60 @@ class FloatingAccessibilityTools {
           this.toolId = 'text_simplification';
           this.name = 'Simplify Text';
           this.icon = '📝';
+          this.selectedText = null;
+          this.isSelectingMode = false;
+          this.originalCursor = null;
+          this.simplificationType = 'general';
+          this.readingLevel = 'adult_basic';
         }
         
         getContent() {
           return `
             <div class="tool-content">
-              <div style="text-align: center; padding: 40px 20px;">
-                <div style="font-size: 48px; margin-bottom: 16px;">${this.icon}</div>
-                <div style="font-size: 16px; margin-bottom: 20px;">${this.name}</div>
-                <button class="button" id="test-api-btn">Test API Connection</button>
+              <div style="padding: 20px;">
+                <div style="margin-bottom: 20px;">
+                  <button class="button" id="select-text-btn" style="width: 100%; margin-bottom: 10px;">
+                    ${this.isSelectingMode ? 'Click to Stop Selecting' : 'Select Text to Simplify'}
+                  </button>
+                  <div style="font-size: 12px; color: #666; text-align: center;">
+                    ${this.isSelectingMode ? 'Click on any paragraph to select it' : 'Click the button above to start selecting text'}
+                  </div>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                  <label style="display: block; margin-bottom: 8px; font-weight: bold;">Simplification Type:</label>
+                  <select id="simplification-type" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 10px;">
+                    <option value="general">General Simplification</option>
+                    <option value="accessibility">Accessibility Focused</option>
+                    <option value="dyslexia">Dyslexia Friendly</option>
+                    <option value="screen_reader">Screen Reader Optimized</option>
+                  </select>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                  <label style="display: block; margin-bottom: 8px; font-weight: bold;">Reading Level:</label>
+                  <select id="reading-level" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 10px;">
+                    <option value="elementary">Elementary (Grades 1-5)</option>
+                    <option value="middle_school">Middle School (Grades 6-8)</option>
+                    <option value="high_school">High School (Grades 9-12)</option>
+                    <option value="adult_basic" selected>Adult Basic</option>
+                  </select>
+                </div>
+                
+                <div id="selected-text-info" style="display: none; margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 8px;">
+                  <div style="font-weight: bold; margin-bottom: 10px;">Selected Text:</div>
+                  <div id="text-preview" style="font-size: 12px; color: #666; max-height: 100px; overflow-y: auto; border: 1px solid #ddd; padding: 8px; background: white; border-radius: 4px;"></div>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                  <button class="button" id="simplify-text-btn" disabled style="width: 100%; margin-bottom: 10px;">
+                    Simplify Selected Text
+                  </button>
+                  <div style="font-size: 12px; color: #666; text-align: center;">
+                    Simplify the selected text using AI
+                  </div>
+                </div>
+                
                 <div id="api-result" class="result" style="margin-top: 20px;"></div>
               </div>
             </div>
@@ -736,31 +781,322 @@ class FloatingAccessibilityTools {
         }
         
         setupEventListeners(container) {
-          const testBtn = container.querySelector('#test-api-btn');
+          const selectBtn = container.querySelector('#select-text-btn');
+          const simplifyBtn = container.querySelector('#simplify-text-btn');
           const resultDiv = container.querySelector('#api-result');
-          testBtn.addEventListener('click', async () => {
-            await this.testAPI(resultDiv, testBtn);
+          const simplificationTypeSelect = container.querySelector('#simplification-type');
+          const readingLevelSelect = container.querySelector('#reading-level');
+          
+          selectBtn.addEventListener('click', () => {
+            this.toggleSelectionMode(container);
+          });
+          
+          simplifyBtn.addEventListener('click', async () => {
+            await this.simplifyText(resultDiv, simplifyBtn);
+          });
+          
+          simplificationTypeSelect.addEventListener('change', (e) => {
+            this.simplificationType = e.target.value;
+          });
+          
+          readingLevelSelect.addEventListener('change', (e) => {
+            this.readingLevel = e.target.value;
+          });
+          
+          // Add global event listeners for text selection
+          this.addTextSelectionListeners();
+        }
+        
+        toggleSelectionMode(container) {
+          this.isSelectingMode = !this.isSelectingMode;
+          const selectBtn = container.querySelector('#select-text-btn');
+          const instructionText = container.querySelector('#select-text-btn').nextElementSibling;
+          
+          if (this.isSelectingMode) {
+            selectBtn.textContent = 'Click to Stop Selecting';
+            instructionText.textContent = 'Click on any paragraph to select it';
+            this.enableTextSelection();
+          } else {
+            selectBtn.textContent = 'Select Text to Simplify';
+            instructionText.textContent = 'Click the button above to start selecting text';
+            this.disableTextSelection();
+            // Clear any existing selection when stopping selection mode
+            this.clearAllTextHighlighting();
+            this.selectedText = null;
+            this.updateSelectionUI(container);
+          }
+        }
+        
+        enableTextSelection() {
+          // Store original cursor
+          this.originalCursor = document.body.style.cursor;
+          
+          // Remove any existing selection highlighting first
+          this.clearAllTextHighlighting();
+          
+          // Add hover effects to all paragraphs and text elements
+          const textElements = document.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, article, section');
+          textElements.forEach(element => {
+            // Only select elements that contain substantial text
+            if (element.textContent.trim().length > 20) {
+              element.style.cursor = 'pointer';
+              element.style.outline = 'none';
+              element.style.transition = 'outline 0.2s ease';
+              element.style.backgroundColor = '';
+              
+              // Add hover effect
+              element.addEventListener('mouseenter', this.handleTextHover);
+              element.addEventListener('mouseleave', this.handleTextLeave);
+              element.addEventListener('click', this.handleTextClick);
+            }
+          });
+          
+          // Change cursor for the entire page
+          document.body.style.cursor = 'crosshair';
+        }
+        
+        disableTextSelection() {
+          // Restore original cursor
+          document.body.style.cursor = this.originalCursor;
+          
+          // Remove hover effects from all text elements
+          const textElements = document.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, article, section');
+          textElements.forEach(element => {
+            element.style.cursor = '';
+            element.style.outline = '';
+            element.style.transition = '';
+            
+            // Remove event listeners
+            element.removeEventListener('mouseenter', this.handleTextHover);
+            element.removeEventListener('mouseleave', this.handleTextLeave);
+            element.removeEventListener('click', this.handleTextClick);
           });
         }
         
-        async testAPI(resultDiv, button) {
+        clearAllTextHighlighting() {
+          // Remove all highlighting from text elements
+          const textElements = document.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, article, section');
+          textElements.forEach(element => {
+            element.style.outline = '';
+            element.style.outlineOffset = '';
+            element.style.backgroundColor = '';
+            element.style.borderLeft = '';
+            element.style.paddingLeft = '';
+          });
+        }
+        
+        clearAllHoverHighlighting() {
+          // Remove only hover highlighting (not selection highlighting)
+          const textElements = document.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, article, section');
+          textElements.forEach(element => {
+            // Only clear if it's not the selected text
+            if (!this.selectedText || element !== this.selectedText.element) {
+              element.style.outline = '';
+              element.style.outlineOffset = '';
+              element.style.backgroundColor = '';
+            }
+          });
+        }
+        
+        findSelectableElement(element) {
+          // Walk up the DOM tree to find the most specific selectable element
+          let current = element;
+          const selectableTags = ['p', 'div', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'th', 'article', 'section'];
+          
+          while (current && current !== document.body) {
+            if (selectableTags.includes(current.tagName.toLowerCase())) {
+              // Check if this element has substantial text content
+              const textContent = current.textContent.trim();
+              if (textContent.length > 20) {
+                return current;
+              }
+            }
+            current = current.parentElement;
+          }
+          
+          return null;
+        }
+        
+        handleTextHover = (event) => {
+          if (this.isSelectingMode) {
+            // Clear all existing hover highlights first
+            this.clearAllHoverHighlighting();
+            
+            // Find the most specific selectable element
+            const selectableElement = this.findSelectableElement(event.target);
+            if (selectableElement) {
+              selectableElement.style.outline = '2px solid #28a745';
+              selectableElement.style.outlineOffset = '2px';
+              selectableElement.style.backgroundColor = 'rgba(40, 167, 69, 0.1)';
+            }
+          }
+        }
+        
+        handleTextLeave = (event) => {
+          if (this.isSelectingMode) {
+            // Clear all hover highlighting when leaving any element
+            this.clearAllHoverHighlighting();
+          }
+        }
+        
+        handleTextClick = (event) => {
+          if (this.isSelectingMode) {
+            event.preventDefault();
+            event.stopPropagation();
+            
+            // Find the most specific selectable element
+            const selectableElement = this.findSelectableElement(event.target);
+            if (selectableElement) {
+              this.selectText(selectableElement);
+              this.isSelectingMode = false;
+              this.disableTextSelection();
+              
+              // Update UI using the shadow root reference
+              if (this.shadowRoot) {
+                const container = this.shadowRoot.querySelector('.tool-panel');
+                if (container) {
+                  this.updateSelectionUI(container);
+                }
+              }
+            }
+          }
+        }
+        
+        selectText(textElement) {
+          const text = textElement.textContent.trim();
+          
+          // Clear all existing highlighting first
+          this.clearAllTextHighlighting();
+          
+          this.selectedText = {
+            element: textElement,
+            text: text,
+            originalHTML: textElement.innerHTML,
+            tagName: textElement.tagName.toLowerCase()
+          };
+          
+          // Highlight only the selected text
+          textElement.style.outline = '2px solid #28a745';
+          textElement.style.outlineOffset = '2px';
+          textElement.style.backgroundColor = 'rgba(40, 167, 69, 0.1)';
+          
+          console.log('Text selected:', this.selectedText);
+        }
+        
+        updateSelectionUI(container) {
+          console.log('Updating text selection UI, container:', container);
+          console.log('Selected text:', this.selectedText);
+          
+          const selectBtn = container.querySelector('#select-text-btn');
+          const instructionText = selectBtn.nextElementSibling;
+          const textInfo = container.querySelector('#selected-text-info');
+          const textPreview = container.querySelector('#text-preview');
+          const simplifyBtn = container.querySelector('#simplify-text-btn');
+          
+          console.log('Found elements:', { selectBtn, instructionText, textInfo, textPreview, simplifyBtn });
+          
+          selectBtn.textContent = 'Select Different Text';
+          instructionText.textContent = 'Click to select different text';
+          
+          if (this.selectedText) {
+            console.log('Updating UI with selected text');
+            textInfo.style.display = 'block';
+            
+            // Show preview of selected text (truncated if too long)
+            const previewText = this.selectedText.text.length > 200 
+              ? this.selectedText.text.substring(0, 200) + '...'
+              : this.selectedText.text;
+            
+            textPreview.textContent = previewText;
+            simplifyBtn.disabled = false;
+          } else {
+            console.log('No selected text to display');
+          }
+        }
+        
+        addTextSelectionListeners() {
+          // This method is called when the tool is initialized
+          // The actual listeners are added/removed in enableTextSelection/disableTextSelection
+        }
+        
+        async simplifyText(resultDiv, button) {
+          if (!this.selectedText) {
+            resultDiv.textContent = 'Please select text first';
+            resultDiv.className = 'result error';
+            return;
+          }
+          
           button.disabled = true;
-          resultDiv.textContent = 'Testing API connection...';
+          resultDiv.textContent = 'Simplifying text...';
           resultDiv.className = 'result loading';
+          
           try {
             const response = await fetch('http://localhost:8000/tools/text_simplification/process', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: 'This is a test text to simplify.' })
+              body: JSON.stringify({ 
+                text: this.selectedText.text,
+                simplification_type: this.simplificationType,
+                reading_level: this.readingLevel
+              })
             });
             const data = await response.json();
-            resultDiv.textContent = `API Response: ${JSON.stringify(data, null, 2)}`;
-            resultDiv.className = 'result success';
+            
+            if (data.success) {
+              // Replace the original text with simplified version
+              this.replaceTextWithSimplified(data.data.simplified_text);
+              resultDiv.textContent = 'Text simplified successfully!';
+              resultDiv.className = 'result success';
+            } else {
+              resultDiv.textContent = `Error: ${data.message}`;
+              resultDiv.className = 'result error';
+            }
           } catch (error) {
             resultDiv.textContent = `Error: ${error.message}`;
             resultDiv.className = 'result error';
           } finally {
             button.disabled = false;
+          }
+        }
+        
+        replaceTextWithSimplified(simplifiedText) {
+          if (this.selectedText && this.selectedText.element) {
+            // Create a wrapper div to contain the simplified text with visual indicator
+            const wrapper = document.createElement('div');
+            wrapper.style.position = 'relative';
+            wrapper.style.borderLeft = '4px solid #28a745';
+            wrapper.style.paddingLeft = '8px';
+            wrapper.style.marginLeft = '2px';
+            
+            // Create the text element
+            const newElement = document.createElement(this.selectedText.tagName);
+            newElement.innerHTML = simplifiedText;
+            
+            // Copy all attributes from the original element
+            Array.from(this.selectedText.element.attributes).forEach(attr => {
+              newElement.setAttribute(attr.name, attr.value);
+            });
+            
+            // Reset any existing styles that might interfere
+            newElement.style.margin = '0';
+            newElement.style.padding = '0';
+            newElement.style.border = 'none';
+            newElement.style.backgroundColor = 'transparent';
+            
+            // Assemble the wrapper
+            wrapper.appendChild(newElement);
+            
+            // Replace the original element
+            this.selectedText.element.parentNode.replaceChild(wrapper, this.selectedText.element);
+            
+            // Update the selected text reference to point to the wrapper
+            this.selectedText.element = wrapper;
+            
+            // Clear the selection highlighting since text has been replaced
+            this.clearAllTextHighlighting();
+            this.selectedText = null;
+            
+            console.log('Text replaced with simplified version');
           }
         }
       }

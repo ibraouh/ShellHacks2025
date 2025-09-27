@@ -56,7 +56,9 @@
   bottom: 80px;
   right: 0;
   width: 320px;
+  height: 70vh;
   min-height: 400px;
+  max-height: 80vh;
   background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(24px);
   border-radius: 24px;
