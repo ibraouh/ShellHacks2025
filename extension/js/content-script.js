@@ -1475,7 +1475,7 @@ class FloatingAccessibilityTools {
               <div style="text-align: center; padding: 40px 20px;">
                 <div style="font-size: 48px; margin-bottom: 16px;">${this.icon}</div>
                 <div style="font-size: 16px; margin-bottom: 20px;">${this.name}</div>
-                <button class="button" id="test-api-btn">Test API Connection</button>
+                <button class="button" id="test-api-btn">Make dyslexic-friendly font</button>
                 <div id="api-result" class="result" style="margin-top: 20px;"></div>
               </div>
             </div>
@@ -1492,23 +1492,78 @@ class FloatingAccessibilityTools {
         
         async testAPI(resultDiv, button) {
           button.disabled = true;
-          resultDiv.textContent = 'Testing API connection...';
+          resultDiv.textContent = 'Applying dyslexic-friendly font...';
           resultDiv.className = 'result loading';
+          
           try {
-            const response = await fetch('http://localhost:8000/tools/adaptive_css/process', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ css_rules: 'high_contrast', user_preferences: '{"font_size":"large"}' })
-            });
-            const data = await response.json();
-            resultDiv.textContent = `API Response: ${JSON.stringify(data, null, 2)}`;
+            // Apply dyslexic-friendly font to the entire page
+            this.applyDyslexicFont();
+            resultDiv.textContent = 'Dyslexic-friendly font applied successfully! The page now uses OpenDyslexic font.';
             resultDiv.className = 'result success';
           } catch (error) {
-            resultDiv.textContent = `Error: ${error.message}`;
+            resultDiv.textContent = `Error applying font: ${error.message}`;
             resultDiv.className = 'result error';
           } finally {
             button.disabled = false;
           }
+        }
+        
+        applyDyslexicFont() {
+          // Check if font styles are already injected
+          if (document.getElementById('dyslexic-font-styles')) {
+            return; // Font already applied
+          }
+          
+          // Create style element for font-face declarations and font application
+          const style = document.createElement('style');
+          style.id = 'dyslexic-font-styles';
+          style.textContent = `
+            @font-face {
+              font-family: 'OpenDyslexic';
+              src: url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Regular.woff2')}') format('woff2'),
+                   url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Regular.woff')}') format('woff'),
+                   url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Regular.otf')}') format('opentype');
+              font-weight: normal;
+              font-style: normal;
+            }
+            
+            @font-face {
+              font-family: 'OpenDyslexic';
+              src: url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Bold.woff2')}') format('woff2'),
+                   url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Bold.woff')}') format('woff'),
+                   url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Bold.otf')}') format('opentype');
+              font-weight: bold;
+              font-style: normal;
+            }
+            
+            @font-face {
+              font-family: 'OpenDyslexic';
+              src: url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Italic.woff2')}') format('woff2'),
+                   url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Italic.woff')}') format('woff'),
+                   url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Italic.otf')}') format('opentype');
+              font-weight: normal;
+              font-style: italic;
+            }
+            
+            @font-face {
+              font-family: 'OpenDyslexic';
+              src: url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Bold-Italic.woff2')}') format('woff2'),
+                   url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Bold-Italic.woff')}') format('woff'),
+                   url('${chrome.runtime.getURL('assets/fonts/opendyslexic/OpenDyslexic-Bold-Italic.otf')}') format('opentype');
+              font-weight: bold;
+              font-style: italic;
+            }
+            
+            /* Apply OpenDyslexic font to all text elements */
+            * {
+              font-family: 'OpenDyslexic', sans-serif !important;
+            }
+          `;
+          
+          // Inject the styles into the document head
+          document.head.appendChild(style);
+          
+          console.log('Dyslexic-friendly font (OpenDyslexic) applied to the page');
         }
       },
       // ========================================================================
