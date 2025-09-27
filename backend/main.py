@@ -16,9 +16,9 @@ app = FastAPI(title="Accessibility Tools API", version="1.0.0")
 # Add CORS middleware to allow requests from the Chrome extension
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["chrome-extension://*"],  # Allow all Chrome extensions
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["*"],  # Allow all origins for development
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 

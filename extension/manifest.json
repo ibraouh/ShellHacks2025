@@ -5,17 +5,33 @@
   "description": "A collection of accessibility tools for better web browsing experience",
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
     "http://localhost:8000/*",
     "https://*/*"
   ],
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Accessibility Tools"
+  "background": {
+    "service_worker": "js/background.js"
   },
+  "action": {
+    "default_title": "Accessibility Tools - Click to toggle floating panel"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["js/content-script.js"],
+      "run_at": "document_end"
+    }
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["css/*.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
