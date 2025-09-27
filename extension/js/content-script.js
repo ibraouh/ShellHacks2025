@@ -368,48 +368,872 @@ class FloatingAccessibilityTools {
           this.toolId = 'speech_to_instructions';
           this.name = 'Speech Commands';
           this.icon = '🎤';
+          this.sessionId = Math.random().toString().substring(10);
+          this.eventSource = null;
+          this.isAudioMode = false;
+          this.audioPlayerNode = null;
+          this.audioPlayerContext = null;
+          this.audioRecorderNode = null;
+          this.audioRecorderContext = null;
+          this.micStream = null;
+          this.audioBuffer = [];
+          this.bufferTimer = null;
+          this.currentMessageId = null;
+          this.messageBuffer = "";
+          this.container = null; // Store reference to the container
+          this.processingButton = false; // Flag to prevent duplicate button processing
         }
         
         getContent() {
           return `
-            <div class="tool-content">
-              <div style="text-align: center; padding: 40px 20px;">
-                <div style="font-size: 48px; margin-bottom: 16px;">${this.icon}</div>
-                <div style="font-size: 16px; margin-bottom: 20px;">${this.name}</div>
-                <button class="button" id="test-api-btn">Test API Connection</button>
-                <div id="api-result" class="result" style="margin-top: 20px;"></div>
+            <div class="tool-content" style="height: 100%; display: flex; flex-direction: column; margin-bottom: 0px; padding-bottom: 0px;">
+                <!-- Chat Messages -->
+                <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; min-height: 0; max-height: calc(100% - 180px);">
+                <div class="chat-message agent" style="margin-bottom: 15px;">
+                  <div style="display: flex;">
+                    <div style="background: white; padding: 8px 12px; border-radius: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 80%;">
+                      <div style="color: #333; font-size: 14px; line-height: 1.4;">Hello! I'm ready to help you interact with this webpage. What would you like me to do?</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Input Area -->
+              <div style="border-top: 1px solid #e0e0e0; background: white; padding: 8px 8px; flex-shrink: 0;">
+                <!-- Text Input -->
+                <div id="text-mode">
+                  <div style="display: flex; gap: 8px; margin-bottom: 2px;">
+                    <input type="text" id="speech-text-input" placeholder="Type your message..." 
+                           style="flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 20px; font-size: 14px; height: 40px; outline: none; transition: border-color 0.2s;"
+                           onfocus="this.style.borderColor='#667eea'" onblur="this.style.borderColor='#ddd'">
+                    <button class="button" id="send-text-btn" style="padding: 8px 0px; border-radius: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; color: white; font-size: 16px; cursor: pointer; transition: transform 0.2s; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; margin: 0px;" 
+                            onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">↵</button>
+                  </div>
+                </div>
+                
+                <!-- Audio Mode -->
+                <div id="audio-mode" style="display: none;">
+                  <div style="display: flex; gap: 8px; margin-bottom: 2px;">
+                    <button class="button" id="start-audio-btn" style="flex: 1; padding: 8px 12px; border-radius: 25px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; color: white; font-size: 14px; cursor: pointer;margin-top: 2px; margin-bottom: 0px;">🎤 Start Recording</button>
+                    <button class="button" id="stop-audio-btn" style="flex: 1; padding: 8px 12px; border-radius: 25px; background: #dc3545; border: none; color: white; font-size: 14px; cursor: pointer; display: none;">⏹️ Stop Recording</button>
+                  </div>
+                </div>
+                
+                <!-- Mode Toggle -->
+                <div style="text-align: center;">
+                  <button class="button" id="toggle-mode-btn" style="padding: 6px 14px; border-radius: 20px; background: #f4f6fb; border: 1px solid #ddd; color: #666; font-size: 12px; cursor: pointer; transition: all 0.2s;"
+                          onmouseover="this.style.backgroundColor='#e9ecef'" onmouseout="this.style.backgroundColor='#f4f6fb'">Switch to Audio Mode</button>
+                </div>
               </div>
             </div>
           `;
         }
         
         setupEventListeners(container) {
-          const testBtn = container.querySelector('#test-api-btn');
-          const resultDiv = container.querySelector('#api-result');
-          testBtn.addEventListener('click', async () => {
-            await this.testAPI(resultDiv, testBtn);
+          console.log('Setting up event listeners for container:', container);
+          this.container = container; // Store container reference
+          
+          const textInput = container.querySelector('#speech-text-input');
+          const sendTextBtn = container.querySelector('#send-text-btn');
+          const startAudioBtn = container.querySelector('#start-audio-btn');
+          const stopAudioBtn = container.querySelector('#stop-audio-btn');
+          const toggleModeBtn = container.querySelector('#toggle-mode-btn');
+          const chatMessages = container.querySelector('#chat-messages');
+          
+          console.log('Found elements:', {
+            textInput, sendTextBtn, startAudioBtn, stopAudioBtn, 
+            toggleModeBtn, chatMessages
           });
+          
+          // Text mode
+          sendTextBtn.addEventListener('click', () => {
+            const text = textInput.value.trim();
+            if (text) {
+              this.sendTextCommand(text);
+              textInput.value = '';
+            }
+          });
+          
+          textInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+              const text = textInput.value.trim();
+              if (text) {
+                this.sendTextCommand(text);
+                textInput.value = '';
+              }
+            }
+          });
+          
+          // Audio mode
+          startAudioBtn.addEventListener('click', () => {
+            this.startAudioRecording();
+          });
+          
+          stopAudioBtn.addEventListener('click', () => {
+            this.stopAudioRecording();
+          });
+          
+          // Mode toggle
+          toggleModeBtn.addEventListener('click', () => {
+            this.toggleMode();
+          });
+          
+        // Initialize SSE connection after a short delay to ensure UI is ready
+        setTimeout(() => {
+          this.connectSSE();
+        }, 100);
         }
         
-        async testAPI(resultDiv, button) {
-          button.disabled = true;
-          resultDiv.textContent = 'Testing API connection...';
-          resultDiv.className = 'result loading';
+        connectSSE() {
+          const sseUrl = `http://localhost:8000/events/${this.sessionId}?is_audio=${this.isAudioMode}`;
+          console.log('Connecting to SSE:', sseUrl);
+          this.eventSource = new EventSource(sseUrl);
+          
+        this.eventSource.onopen = () => {
+          console.log('SSE connection opened');
+          this.addSystemMessage('Connected to speech commands', 'success');
+        };
+          
+          this.eventSource.onmessage = (event) => {
+            console.log('Raw SSE message:', event.data);
+            try {
+              const message = JSON.parse(event.data);
+              console.log('Parsed SSE message:', message);
+              this.handleSSEMessage(message);
+            } catch (e) {
+              console.error('Error parsing SSE message:', e, 'Raw data:', event.data);
+            }
+          };
+          
+        this.eventSource.onerror = (event) => {
+          console.error('SSE connection error:', event);
+          this.addSystemMessage('Connection lost, reconnecting...', 'error');
+          setTimeout(() => this.connectSSE(), 5000);
+        };
+        }
+        
+        handleSSEMessage(message) {
+          console.log('Handling SSE message:', message);
+          
+          if (message.turn_complete) {
+            console.log('Turn complete, clearing message buffer');
+            this.currentMessageId = null;
+            this.messageBuffer = "";
+            return;
+          }
+          
+          if (message.interrupted) {
+            if (this.audioPlayerNode) {
+              this.audioPlayerNode.port.postMessage({ command: "endOfAudio" });
+            }
+            return;
+          }
+          
+          if (message.mime_type === "audio/pcm" && this.audioPlayerNode) {
+            this.audioPlayerNode.port.postMessage(this.base64ToArray(message.data));
+          }
+          
+          if (message.mime_type === "text/plain") {
+            console.log('Processing text message:', message.data);
+            console.log('Current messageBuffer:', this.messageBuffer);
+            this.messageBuffer += message.data;
+            console.log('Updated messageBuffer:', this.messageBuffer);
+            
+            // Try to find and parse JSON button actions
+            const actionProcessed = this.tryParseJSONActions();
+            console.log('Action processed:', actionProcessed);
+            
+            // If an action was processed, don't add the raw JSON to chat
+            if (actionProcessed) {
+              console.log('Action was processed, returning early');
+              return;
+            }
+            
+            // Check if this is a direct JSON action (not in buffer)
+            const text = message.data.trim();
+            if (this.isDirectJSONAction(text)) {
+              console.log('Detected direct JSON action:', text);
+              return;
+            }
+            
+            // Check if this is a system action message (not a chat message)
+            if (this.isSystemActionMessage(text)) {
+              console.log('Detected system action message:', text);
+              this.addSystemMessage(text, 'info');
+              return;
+            }
+            
+          // Add text to results (this is a chat message)
+          if (this.currentMessageId === null) {
+            this.currentMessageId = Math.random().toString(36).substring(7);
+            console.log('Creating new message element with ID:', this.currentMessageId);
+            this.addChatMessage('', 'agent', this.currentMessageId);
+          }
+            
+            // Find the message element within the container
+            const messageElement = this.container ? this.container.querySelector(`#${this.currentMessageId}`) : document.getElementById(this.currentMessageId);
+            if (messageElement) {
+              console.log('Updating message element with:', message.data);
+              // Find the text div within the message bubble
+              const textDiv = messageElement.querySelector('div[style*="color: #333"]');
+              if (textDiv) {
+                textDiv.textContent += message.data;
+              } else {
+                // Fallback: update the entire message content
+                messageElement.textContent += message.data;
+              }
+            } else {
+              console.error('Message element not found with ID:', this.currentMessageId);
+              // Fallback: add the text directly to results
+              this.addChatMessage(message.data, 'agent');
+            }
+          }
+        }
+        
+        isDirectJSONAction(text) {
+          // Check if the text is a direct JSON action (not buffered)
           try {
-            const response = await fetch('http://localhost:8000/tools/speech_to_instructions/process', {
+            const data = JSON.parse(text);
+            
+            // Check if this is a nested result with button action
+            if (data.result && typeof data.result === 'string' && !this.processingButton) {
+              console.log('Found direct nested result, processingButton:', this.processingButton);
+              console.log('Result string:', data.result);
+              try {
+                const innerData = JSON.parse(data.result);
+                console.log('Parsed inner data:', innerData);
+                if (innerData.elementId && innerData.event === "click") {
+                  console.log('Processing direct nested button action:', innerData);
+                  this.processingButton = true;
+                  this.handleButtonAction(innerData);
+                  // Reset flag after a short delay
+                  setTimeout(() => {
+                    this.processingButton = false;
+                  }, 1000);
+                  return true; // Action was processed
+                }
+              } catch (innerE) {
+                console.log('Inner JSON parse failed:', innerE);
+              }
+            }
+            
+            // Check if this is a direct button action
+            if (data.elementId && data.event === "click" && !this.processingButton) {
+              console.log('Processing direct button action:', data);
+              this.processingButton = true;
+              this.handleButtonAction(data);
+              // Reset flag after a short delay
+              setTimeout(() => {
+                this.processingButton = false;
+              }, 1000);
+              return true; // Action was processed
+            }
+            
+            // Check if this is a webpage scan request
+            if (data.action === "scan_webpage") {
+              console.log('Processing direct webpage scan request');
+              const scanResult = this.scanWebpageElements();
+              this.addSystemMessage(`${scanResult.elements.length} elements found`, 'info');
+              this.sendScanResults(scanResult);
+              return true; // Action was processed
+            }
+            
+          } catch (e) {
+            console.log('Not a JSON action:', e);
+          }
+          
+          return false; // Not a JSON action
+        }
+        
+        isSystemActionMessage(text) {
+          // System action messages are typically short, informational messages
+          // that describe what the system is doing, not conversational responses
+          const systemPatterns = [
+            /^\d+\s+(buttons?|elements?)\s+found/i,
+            /^\d+\s+(buttons?|elements?)\s+available/i,
+            /scanning/i,
+            /connected/i,
+            /disconnected/i,
+            /error/i,
+            /loading/i,
+            /processing/i,
+            /found\s+\d+/i,
+            /elements?\s+found/i,
+            /buttons?\s+found/i,
+            /scan\s+complete/i,
+            /ready/i,
+            /starting/i,
+            /stopping/i
+          ];
+          
+          // Check if the text matches any system action pattern
+          return systemPatterns.some(pattern => pattern.test(text));
+        }
+        
+        tryParseJSONActions() {
+          // Look for complete JSON objects in the buffer
+          let braceCount = 0;
+          let startIndex = -1;
+          
+          for (let i = 0; i < this.messageBuffer.length; i++) {
+            if (this.messageBuffer[i] === '{') {
+              if (startIndex === -1) startIndex = i;
+              braceCount++;
+            } else if (this.messageBuffer[i] === '}') {
+              braceCount--;
+              if (braceCount === 0 && startIndex !== -1) {
+                // Found a complete JSON object
+                const jsonStr = this.messageBuffer.substring(startIndex, i + 1);
+                console.log('Found complete JSON:', jsonStr);
+                
+                try {
+                  const data = JSON.parse(jsonStr);
+                  console.log('Parsed JSON data:', data);
+                  console.log('Has result field:', !!data.result);
+                  console.log('Result type:', typeof data.result);
+                  
+                  // Check if this is a webpage scan request
+                  if (data.action === "scan_webpage") {
+                    console.log('Processing webpage scan request');
+                    const scanResult = this.scanWebpageElements();
+                    this.addSystemMessage(`${scanResult.elements.length} elements found`, 'info');
+                    
+                    // Send the scan results back to the agent
+                    this.sendScanResults(scanResult);
+                    
+                    // Remove the processed JSON from buffer
+                    this.messageBuffer = this.messageBuffer.substring(i + 1);
+                    return true; // Action was processed
+                  }
+                  
+                  // Check if this is a button action directly
+                  if (data.elementId && data.event === "click" && !this.processingButton) {
+                    console.log('Processing button action:', data);
+                    this.processingButton = true;
+                    this.handleButtonAction(data);
+                    // Remove the processed JSON from buffer and return to prevent duplicate processing
+                    this.messageBuffer = this.messageBuffer.substring(i + 1);
+                    // Reset flag after a short delay
+                    setTimeout(() => {
+                      this.processingButton = false;
+                    }, 1000);
+                    return true; // Action was processed
+                  }
+                  
+                  // Check if this is a nested result with button action
+                  if (data.result && typeof data.result === 'string' && !this.processingButton) {
+                    console.log('Found nested result, processingButton:', this.processingButton);
+                    console.log('Result string:', data.result);
+                    try {
+                      const innerData = JSON.parse(data.result);
+                      console.log('Parsed inner data:', innerData);
+                      if (innerData.elementId && innerData.event === "click") {
+                        console.log('Processing nested button action:', innerData);
+                        this.processingButton = true;
+                        this.handleButtonAction(innerData);
+                        // Remove the processed JSON from buffer and return to prevent duplicate processing
+                        this.messageBuffer = this.messageBuffer.substring(i + 1);
+                        // Reset flag after a short delay
+                        setTimeout(() => {
+                          this.processingButton = false;
+                        }, 1000);
+                        return true; // Action was processed
+                      }
+                    } catch (innerE) {
+                      console.log('Inner JSON parse failed:', innerE);
+                    }
+                  }
+                } catch (e) {
+                  console.log('JSON parse failed:', e, 'String:', jsonStr);
+                }
+                
+                // Reset for next JSON object
+                startIndex = -1;
+              }
+            }
+          }
+          return false; // No action was processed
+        }
+        
+        scanWebpageElements() {
+          console.log('Scanning webpage for clickable elements...');
+          
+          const elements = [];
+          const selectors = [
+            'button',
+            'a[href]',
+            'input[type="button"]',
+            'input[type="submit"]',
+            'input[type="reset"]',
+            'input[type="checkbox"]',
+            'input[type="radio"]',
+            'select',
+            'textarea',
+            '[onclick]',
+            '[role="button"]',
+            '[role="link"]',
+            '[role="menuitem"]',
+            '[role="tab"]',
+            '[role="option"]',
+            '[tabindex]:not([tabindex="-1"])'
+          ];
+          
+          // Collect all clickable elements
+          selectors.forEach(selector => {
+            const foundElements = document.querySelectorAll(selector);
+            foundElements.forEach(element => {
+              // Skip elements that are not visible or are disabled
+              if (this.isElementVisible(element) && !element.disabled) {
+                const rect = element.getBoundingClientRect();
+                const isVisible = rect.width > 0 && rect.height > 0 && 
+                                 rect.top >= 0 && rect.left >= 0 &&
+                                 rect.bottom <= window.innerHeight && 
+                                 rect.right <= window.innerWidth;
+                
+                elements.push({
+                  tagName: element.tagName.toLowerCase(),
+                  text: element.textContent?.trim() || element.value || '',
+                  id: element.id || '',
+                  className: element.className || '',
+                  type: element.type || '',
+                  href: element.href || '',
+                  onclick: element.onclick ? 'has onclick handler' : '',
+                  role: element.getAttribute('role') || '',
+                  tabIndex: element.tabIndex || '',
+                  visible: isVisible,
+                  position: {
+                    top: Math.round(rect.top),
+                    left: Math.round(rect.left),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height)
+                  }
+                });
+              }
+            });
+          });
+          
+          // Remove duplicates and prioritize visible elements
+          const uniqueElements = [];
+          const seenElements = new Set();
+          
+          // First pass: add visible elements
+          elements.forEach(element => {
+            const key = `${element.tagName}-${element.text}-${element.id}`;
+            if (element.visible && !seenElements.has(key)) {
+              uniqueElements.push(element);
+              seenElements.add(key);
+            }
+          });
+          
+          // Second pass: add non-visible elements if we have space
+          elements.forEach(element => {
+            const key = `${element.tagName}-${element.text}-${element.id}`;
+            if (!element.visible && !seenElements.has(key) && uniqueElements.length < 30) {
+              uniqueElements.push(element);
+              seenElements.add(key);
+            }
+          });
+          
+          // Limit to 30 elements
+          const limitedElements = uniqueElements.slice(0, 30);
+          
+          console.log(`Found ${limitedElements.length} clickable elements:`, limitedElements);
+          
+          return {
+            action: "webpage_scan_complete",
+            elements: limitedElements,
+            totalFound: elements.length,
+            message: `Found ${limitedElements.length} clickable elements on the page`
+          };
+        }
+        
+        isElementVisible(element) {
+          const style = window.getComputedStyle(element);
+          return style.display !== 'none' && 
+                 style.visibility !== 'hidden' && 
+                 style.opacity !== '0' &&
+                 element.offsetParent !== null;
+        }
+        
+        async sendScanResults(scanResult) {
+          try {
+            const response = await fetch(`http://localhost:8000/send/${this.sessionId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ audio_data: 'test_audio_data' })
+              body: JSON.stringify({
+                mime_type: "text/plain",
+                data: `Webpage scan complete. Found ${scanResult.elements.length} clickable elements:\n\n${JSON.stringify(scanResult.elements, null, 2)}`
+              })
             });
-            const data = await response.json();
-            resultDiv.textContent = `API Response: ${JSON.stringify(data, null, 2)}`;
-            resultDiv.className = 'result success';
+            
+            if (response.ok) {
+              console.log('Scan results sent to agent');
+            }
           } catch (error) {
-            resultDiv.textContent = `Error: ${error.message}`;
-            resultDiv.className = 'result error';
-          } finally {
-            button.disabled = false;
+            console.error('Error sending scan results:', error);
+            this.addSystemMessage(`Error sending scan results: ${error.message}`, 'error');
           }
+        }
+        
+        handleButtonAction(data) {
+          console.log('Handling button action:', data);
+          
+          // Look for buttons on the webpage (not in the extension)
+          let element = null;
+          let buttonDescription = '';
+          
+          // Try different selectors to find the button
+          if (data.elementId) {
+            element = document.querySelector(`#${data.elementId}`);
+            if (element) {
+              buttonDescription = `ID: ${data.elementId}`;
+            }
+          }
+          
+          // If not found by ID, try to find by text content or other attributes
+          if (!element) {
+            const buttons = document.querySelectorAll('button');
+            console.log(`Found ${buttons.length} buttons on page:`, Array.from(buttons).map(b => ({
+              id: b.id,
+              text: b.textContent.trim(),
+              classes: b.className
+            })));
+            // Extract description from elementId if it follows the pattern "button-description"
+            let targetDescription = '';
+            if (data.elementId && data.elementId.startsWith('button-')) {
+              targetDescription = data.elementId.replace('button-', '').replace('-', ' ').toLowerCase();
+            }
+            console.log('Target description from elementId:', targetDescription);
+            
+            // Look for buttons with specific text patterns
+            for (const button of buttons) {
+              const text = button.textContent.toLowerCase().trim();
+              const id = button.id.toLowerCase();
+              
+              // If we have a target description, try to match it FIRST (highest priority)
+              if (targetDescription && (text.includes(targetDescription) || id.includes(targetDescription))) {
+                element = button;
+                buttonDescription = `Matched "${targetDescription}": "${button.textContent.trim()}"`;
+                break;
+              }
+            }
+            
+            // If no specific match found, look for generic patterns
+            if (!element) {
+              for (const button of buttons) {
+                const text = button.textContent.toLowerCase().trim();
+                const id = button.id.toLowerCase();
+                
+                // Check for common button patterns (lower priority)
+                if (text.includes('click me') || 
+                    text.includes('click') ||
+                    text.includes('test') ||
+                    text.includes('button') ||
+                    text.includes('submit') ||
+                    text.includes('cancel') ||
+                    text.includes('login') ||
+                    text.includes('save') ||
+                    text.includes('delete') ||
+                    text.includes('welcome') ||
+                    text.includes('success') ||
+                    id.includes('click') ||
+                    id.includes('test') ||
+                    id.includes('button') ||
+                    id.includes('submit') ||
+                    id.includes('cancel') ||
+                    id.includes('login') ||
+                    id.includes('save') ||
+                    id.includes('delete') ||
+                    id.includes('welcome') ||
+                    id.includes('success') ||
+                    button.onclick) {
+                  element = button;
+                  buttonDescription = `Text: "${button.textContent.trim()}"`;
+                  break;
+                }
+              }
+            }
+          }
+          
+          // If still not found, try to find any button
+          if (!element) {
+            element = document.querySelector('button');
+            if (element) {
+              buttonDescription = `First button found: "${element.textContent.trim()}"`;
+            }
+          }
+          
+          console.log('Looking for button on webpage');
+          console.log('Found element:', element);
+          console.log('Button description:', buttonDescription);
+          
+        if (element) {
+          console.log('Clicking webpage button');
+          element.click();
+          
+          // Extract a clean button name for the user message
+          let buttonName = '';
+          if (element.textContent && element.textContent.trim()) {
+            buttonName = element.textContent.trim();
+          } else if (data.elementId && data.elementId.startsWith('button-')) {
+            buttonName = data.elementId.replace('button-', '').replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase());
+          } else {
+            buttonName = 'button';
+          }
+          
+          // Add a user-friendly chat message instead of system message
+          this.addChatMessage(`I clicked the "${buttonName}" button.`, 'agent');
+        } else {
+          console.error('No button found on webpage');
+          this.addSystemMessage(`No button found on webpage`, 'error');
+        }
+        }
+        
+        async sendTextCommand(text) {
+          try {
+            // First, trigger a webpage scan to give the agent context
+            this.addSystemMessage('Scanning...', 'info');
+            const scanResult = this.scanWebpageElements();
+            await this.sendScanResults(scanResult);
+            
+            // Wait a moment for the scan results to be processed
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Then send the user's command
+            const response = await fetch(`http://localhost:8000/send/${this.sessionId}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                mime_type: "text/plain",
+                data: text
+              })
+            });
+            
+            if (response.ok) {
+              this.addChatMessage(text, 'user');
+            }
+          } catch (error) {
+            this.addSystemMessage(`Error: ${error.message}`, 'error');
+          }
+        }
+        
+        async startAudioRecording() {
+          try {
+            // Import audio worklets
+            const { startAudioPlayerWorklet } = await import(chrome.runtime.getURL('js/audio/audio-player.js'));
+            const { startAudioRecorderWorklet } = await import(chrome.runtime.getURL('js/audio/audio-recorder.js'));
+            
+            // Start audio player
+            const [playerNode, playerCtx] = await startAudioPlayerWorklet();
+            this.audioPlayerNode = playerNode;
+            this.audioPlayerContext = playerCtx;
+            
+            // Start audio recorder
+            const [recorderNode, recorderCtx, stream] = await startAudioRecorderWorklet((pcmData) => {
+              this.audioRecorderHandler(pcmData);
+            });
+            this.audioRecorderNode = recorderNode;
+            this.audioRecorderContext = recorderCtx;
+            this.micStream = stream;
+            
+          // Update UI
+          const startBtn = this.container ? this.container.querySelector('#start-audio-btn') : document.querySelector('#start-audio-btn');
+          const stopBtn = this.container ? this.container.querySelector('#stop-audio-btn') : document.querySelector('#stop-audio-btn');
+          if (startBtn) startBtn.style.display = 'none';
+          if (stopBtn) stopBtn.style.display = 'inline-block';
+            this.addSystemMessage('Audio recording started', 'success');
+            
+          } catch (error) {
+            this.addSystemMessage(`Audio error: ${error.message}`, 'error');
+          }
+        }
+        
+        stopAudioRecording() {
+          if (this.bufferTimer) {
+            clearInterval(this.bufferTimer);
+            this.bufferTimer = null;
+          }
+          
+          if (this.audioBuffer.length > 0) {
+            this.sendBufferedAudio();
+          }
+          
+          if (this.micStream) {
+            this.micStream.getTracks().forEach(track => track.stop());
+          }
+          
+        // Update UI
+        const startBtn = this.container ? this.container.querySelector('#start-audio-btn') : document.querySelector('#start-audio-btn');
+        const stopBtn = this.container ? this.container.querySelector('#stop-audio-btn') : document.querySelector('#stop-audio-btn');
+        if (startBtn) startBtn.style.display = 'inline-block';
+        if (stopBtn) stopBtn.style.display = 'none';
+          this.addSystemMessage('Audio recording stopped', 'info');
+        }
+        
+        audioRecorderHandler(pcmData) {
+          this.audioBuffer.push(new Uint8Array(pcmData));
+          
+          if (!this.bufferTimer) {
+            this.bufferTimer = setInterval(() => this.sendBufferedAudio(), 200);
+          }
+        }
+        
+        async sendBufferedAudio() {
+          if (this.audioBuffer.length === 0) return;
+          
+          let totalLength = 0;
+          for (const chunk of this.audioBuffer) {
+            totalLength += chunk.length;
+          }
+          
+          const combinedBuffer = new Uint8Array(totalLength);
+          let offset = 0;
+          for (const chunk of this.audioBuffer) {
+            combinedBuffer.set(chunk, offset);
+            offset += chunk.length;
+          }
+          
+          try {
+            await fetch(`http://localhost:8000/send/${this.sessionId}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                mime_type: "audio/pcm",
+                data: this.arrayBufferToBase64(combinedBuffer.buffer)
+              })
+            });
+        } catch (error) {
+          this.addSystemMessage(`Audio send error: ${error.message}`, 'error');
+        }
+          
+          this.audioBuffer = [];
+        }
+        
+        toggleMode() {
+          this.isAudioMode = !this.isAudioMode;
+          const textMode = this.container ? this.container.querySelector('#text-mode') : document.querySelector('#text-mode');
+          const audioMode = this.container ? this.container.querySelector('#audio-mode') : document.querySelector('#audio-mode');
+          const toggleBtn = this.container ? this.container.querySelector('#toggle-mode-btn') : document.querySelector('#toggle-mode-btn');
+          
+          if (this.isAudioMode) {
+            textMode.style.display = 'none';
+            audioMode.style.display = 'block';
+            toggleBtn.textContent = 'Switch to Text Mode';
+          } else {
+            textMode.style.display = 'block';
+            audioMode.style.display = 'none';
+            toggleBtn.textContent = 'Switch to Audio Mode';
+          }
+          
+          // Reconnect SSE with new mode
+          if (this.eventSource) {
+            this.eventSource.close();
+          }
+          this.connectSSE();
+        }
+        
+        addChatMessage(text, sender = 'agent', id = null) {
+          if (!this.container) {
+            console.error('Container not available for addChatMessage');
+            return;
+          }
+          
+          const chatMessages = this.container.querySelector('#chat-messages');
+          if (!chatMessages) {
+            console.error('Chat messages div not found in container!');
+            return;
+          }
+          
+          const messageDiv = document.createElement('div');
+          messageDiv.className = `chat-message ${sender}`;
+          messageDiv.style.marginBottom = '15px';
+          if (id) messageDiv.id = id;
+          
+          if (sender === 'user') {
+            messageDiv.innerHTML = `
+              <div style="display: flex; justify-content: flex-end;">
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 12px; border-radius: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 80%;">
+                  <div style="font-size: 14px; line-height: 1.4;">${text}</div>
+                </div>
+              </div>
+            `;
+          } else {
+            messageDiv.innerHTML = `
+              <div style="display: flex;">
+                <div style="background: white; padding: 8px 12px; border-radius: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 80%;">
+                  <div style="color: #333; font-size: 14px; line-height: 1.4;">${text}</div>
+                </div>
+              </div>
+            `;
+          }
+          
+          chatMessages.appendChild(messageDiv);
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        addSystemMessage(text, type = 'info') {
+          if (!this.container) {
+            console.error('Container not available for addSystemMessage');
+            return;
+          }
+          
+          const chatMessages = this.container.querySelector('#chat-messages');
+          if (!chatMessages) {
+            console.error('Chat messages div not found in container!');
+            return;
+          }
+          
+          const messageDiv = document.createElement('div');
+          messageDiv.style.marginBottom = '10px';
+          messageDiv.style.textAlign = 'center';
+          
+          let bgColor, textColor, icon;
+          switch (type) {
+            case 'success':
+              bgColor = '#d4edda';
+              textColor = '#155724';
+              icon = '✅';
+              break;
+            case 'error':
+              bgColor = '#f8d7da';
+              textColor = '#721c24';
+              icon = '❌';
+              break;
+            case 'info':
+            default:
+              bgColor = '#d1ecf1';
+              textColor = '#0c5460';
+              icon = 'ℹ️';
+          }
+          
+          messageDiv.innerHTML = `
+            <div style="display: inline-block; background: ${bgColor}; color: ${textColor}; padding: 8px 16px; border-radius: 20px; font-size: 12px; font-weight: 500;">
+              ${icon} ${text}
+            </div>
+          `;
+          
+          chatMessages.appendChild(messageDiv);
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        base64ToArray(base64) {
+          const binaryString = window.atob(base64);
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          return bytes.buffer;
+        }
+        
+        arrayBufferToBase64(buffer) {
+          let binary = "";
+          const bytes = new Uint8Array(buffer);
+          const len = bytes.byteLength;
+          for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          return window.btoa(binary);
         }
       },
       // ========================================================================

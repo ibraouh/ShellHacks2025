@@ -1,7 +1,23 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from typing import Dict, Any
 import json
+import base64
+import asyncio
+import signal
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Import ADK components for SSE
+from google.adk.runners import InMemoryRunner
+from google.adk.agents import LiveRequestQueue
+from google.adk.agents.run_config import RunConfig
+from google.genai import types
+from google.genai.types import Part, Content, Blob
 
 # Import all tools
 from tools.text_to_speech import TextToSpeechTool, TextToSpeechRequest
@@ -10,6 +26,9 @@ from tools.ai_alt_text import AIAltTextTool, AIAltTextRequest
 from tools.adaptive_css import AdaptiveCSSTool, AdaptiveCSSRequest
 from tools.semantic_search import SemanticSearchTool, SemanticSearchRequest
 from tools.text_simplification import TextSimplificationTool, TextSimplificationRequest
+
+# Import agents
+from agents.speech_commands_agent import speech_commands_agent
 
 app = FastAPI(title="Accessibility Tools API", version="1.0.0")
 
@@ -31,6 +50,187 @@ tools = {
     "semantic_search": SemanticSearchTool(),
     "text_simplification": TextSimplificationTool(),
 }
+
+# Store active sessions for SSE
+active_sessions = {}
+
+# Graceful shutdown handler
+def cleanup_sessions():
+    """Clean up all active sessions on shutdown"""
+    print("Cleaning up active sessions...")
+    for user_id, live_request_queue in active_sessions.items():
+        try:
+            live_request_queue.close()
+            print(f"Closed session for user {user_id}")
+        except Exception as e:
+            print(f"Error closing session for user {user_id}: {e}")
+    active_sessions.clear()
+
+# Register shutdown handler
+def signal_handler(signum, frame):
+    print(f"\nReceived signal {signum}, shutting down gracefully...")
+    cleanup_sessions()
+    exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+# FastAPI shutdown event
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Handle FastAPI shutdown"""
+    cleanup_sessions()
+
+# =============================================================================
+# SSE ENDPOINTS FOR REAL-TIME SPEECH COMMANDS
+# =============================================================================
+
+async def start_agent_session(user_id, is_audio=False):
+    """Starts an agent session"""
+    # Create a Runner
+    runner = InMemoryRunner(
+        app_name="Speech Commands Tool",
+        agent=speech_commands_agent,
+    )
+
+    # Create a Session
+    session = await runner.session_service.create_session(
+        app_name="Speech Commands Tool",
+        user_id=user_id,
+    )
+
+    # Set response modality
+    modality = types.Modality.AUDIO if is_audio else types.Modality.TEXT
+    run_config = RunConfig(
+        response_modalities=[modality],
+        session_resumption=types.SessionResumptionConfig(),
+        output_audio_transcription=types.AudioTranscriptionConfig(),
+        input_audio_transcription=types.AudioTranscriptionConfig(),
+    )
+
+    # Create a LiveRequestQueue for this session
+    live_request_queue = LiveRequestQueue()
+
+    # Start agent session
+    live_events = runner.run_live(
+        session=session,
+        live_request_queue=live_request_queue,
+        run_config=run_config,
+    )
+    return live_events, live_request_queue
+
+async def agent_to_client_sse(live_events):
+    """Agent to client communication via SSE"""
+    async for event in live_events:
+        # If the turn complete or interrupted, send it
+        if event.turn_complete or event.interrupted:
+            message = {
+                "turn_complete": event.turn_complete,
+                "interrupted": event.interrupted,
+            }
+            yield f"data: {json.dumps(message)}\n\n"
+            print(f"[AGENT TO CLIENT]: {message}")
+            continue
+
+        # Read the Content and its first Part
+        part: Part = (
+            event.content and event.content.parts and event.content.parts[0]
+        )
+        if not part:
+            continue
+
+        # If it's audio, send Base64 encoded audio data
+        is_audio = part.inline_data and part.inline_data.mime_type.startswith("audio/pcm")
+        if is_audio:
+            audio_data = part.inline_data and part.inline_data.data
+            if audio_data:
+                message = {
+                    "mime_type": "audio/pcm",
+                    "data": base64.b64encode(audio_data).decode("ascii")
+                }
+                yield f"data: {json.dumps(message)}\n\n"
+                print(f"[AGENT TO CLIENT]: audio/pcm: {len(audio_data)} bytes.")
+                continue
+
+        # If it's text, send it only when complete (not partial)
+        if part.text and not event.partial:
+            message = {
+                "mime_type": "text/plain",
+                "data": part.text
+            }
+            yield f"data: {json.dumps(message)}\n\n"
+            print(f"[AGENT TO CLIENT]: text/plain: {message}")
+
+@app.get("/events/{user_id}")
+async def sse_endpoint(user_id: int, is_audio: str = "false"):
+    """SSE endpoint for agent to client communication"""
+    # Start agent session
+    user_id_str = str(user_id)
+    live_events, live_request_queue = await start_agent_session(user_id_str, is_audio == "true")
+
+    # Store the request queue for this user
+    active_sessions[user_id_str] = live_request_queue
+
+    print(f"Client #{user_id} connected via SSE, audio mode: {is_audio}")
+
+    def cleanup():
+        live_request_queue.close()
+        if user_id_str in active_sessions:
+            del active_sessions[user_id_str]
+        print(f"Client #{user_id} disconnected from SSE")
+
+    async def event_generator():
+        try:
+            async for data in agent_to_client_sse(live_events):
+                yield data
+        except Exception as e:
+            print(f"Error in SSE stream: {e}")
+        finally:
+            cleanup()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Cache-Control"
+        }
+    )
+
+@app.post("/send/{user_id}")
+async def send_message_endpoint(user_id: int, request: Request):
+    """HTTP endpoint for client to agent communication"""
+    user_id_str = str(user_id)
+
+    # Get the live request queue for this user
+    live_request_queue = active_sessions.get(user_id_str)
+    if not live_request_queue:
+        return {"error": "Session not found"}
+
+    # Parse the message
+    message = await request.json()
+    mime_type = message["mime_type"]
+    data = message["data"]
+
+    # Send the message to the agent
+    if mime_type == "text/plain":
+        content = Content(role="user", parts=[Part.from_text(text=data)])
+        live_request_queue.send_content(content=content)
+        print(f"[CLIENT TO AGENT]: {data}")
+    elif mime_type == "audio/pcm":
+        decoded_data = base64.b64decode(data)
+        live_request_queue.send_realtime(Blob(data=decoded_data, mime_type=mime_type))
+        print(f"[CLIENT TO AGENT]: audio/pcm: {len(decoded_data)} bytes")
+    else:
+        return {"error": f"Mime type not supported: {mime_type}"}
+
+    return {"status": "sent"}
+
+# =============================================================================
+# EXISTING ENDPOINTS
+# =============================================================================
 
 @app.get("/")
 async def root():
