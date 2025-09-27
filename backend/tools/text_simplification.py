@@ -1,4 +1,6 @@
 from .base_tool import BaseTool, ToolRequest, ToolResponse
+from google import genai
+import os
 
 class TextSimplificationRequest(ToolRequest):
     text: str
@@ -13,27 +15,57 @@ class TextSimplificationTool(BaseTool):
         )
     
     async def process(self, request: TextSimplificationRequest) -> ToolResponse:
-        # For now, return a placeholder response with the LLM prompt
-        # This will be replaced with actual LLM integration later
-        
-        # Generate the LLM prompt based on the request parameters
-        prompt = self._generate_llm_prompt(request.text, request.simplification_type, request.reading_level)
-        
-        # Placeholder simplified text (replace with actual LLM response)
-        simplified_text = f"Simplified text"
-        
-        return ToolResponse(
-            success=True,
-            message="Text simplification completed (placeholder)",
-            data={
-                "original_text": request.text,
-                "simplified_text": simplified_text,
-                "simplification_type": request.simplification_type,
-                "reading_level": request.reading_level,
-                "llm_prompt": prompt,
-                "status": "placeholder_implementation"
-            }
-        )
+        try:
+            # Initialize the Gemini client
+            client = genai.Client()
+
+            # Generate the LLM prompt based on the request parameters
+            prompt = self._generate_llm_prompt(request.text, request.simplification_type, request.reading_level)
+
+            # Call Gemini API to simplify the text
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[prompt],
+                )
+
+                simplified_text = response.text
+
+                return ToolResponse(
+                    success=True,
+                    message="Text simplification completed successfully",
+                    data={
+                        "original_text": request.text,
+                        "simplified_text": simplified_text,
+                        "simplification_type": request.simplification_type,
+                        "reading_level": request.reading_level,
+                        "status": "completed"
+                    }
+                )
+            except Exception as e:
+                print(f"Error generating content with Gemini: {e}")
+                return ToolResponse(
+                    success=False,
+                    message=f"Failed to simplify text with Gemini: {str(e)}",
+                    data={
+                        "original_text": request.text,
+                        "simplification_type": request.simplification_type,
+                        "reading_level": request.reading_level,
+                        "status": "error"
+                    }
+                )
+                
+        except Exception as e:
+            return ToolResponse(
+                success=False,
+                message=f"Text simplification failed: {str(e)}",
+                data={
+                    "original_text": request.text,
+                    "simplification_type": request.simplification_type,
+                    "reading_level": request.reading_level,
+                    "status": "error"
+                }
+            )
     
     def _generate_llm_prompt(self, text: str, simplification_type: str, reading_level: str) -> str:
         """
