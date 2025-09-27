@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Accessibility Tools</title>
+  <link rel="stylesheet" href="css/shared.css">
+</head>
+<body>
+  <div class="header">
+    <h1>Accessibility Tools</h1>
+  </div>
+
+  <div class="tab-container">
+    <button class="tab active" data-tool-id="text_to_speech">Text-to-Speech</button>
+    <button class="tab" data-tool-id="speech_to_instructions">Speech Commands</button>
+    <button class="tab" data-tool-id="ai_alt_text">AI Alt Text</button>
+    <button class="tab" data-tool-id="adaptive_css">CSS Adjust</button>
+    <button class="tab" data-tool-id="semantic_search">Search</button>
+    <button class="tab" data-tool-id="text_simplification">Simplify Text</button>
+  </div>
+
+  <!-- Tool content will be loaded dynamically here -->
+  <div id="tool-content-container">
+    <div class="loading-message">Loading tools...</div>
+  </div>
+
+  <!-- Generated HTML templates (must be loaded first) -->
+  <script src="js/html-templates.js"></script>
+  
+  <!-- Tool-specific scripts -->
+  <script src="js/tools/text_to_speech.js"></script>
+  <script src="js/tools/speech_to_instructions.js"></script>
+  <script src="js/tools/ai_alt_text.js"></script>
+  <script src="js/tools/adaptive_css.js"></script>
+  <script src="js/tools/semantic_search.js"></script>
+  <script src="js/tools/text_simplification.js"></script>
+  
+  <!-- Shared utilities (must be loaded last) -->
+  <script src="js/shared.js"></script>
+</body>
+</html>

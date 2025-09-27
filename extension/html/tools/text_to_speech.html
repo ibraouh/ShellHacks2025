@@ -1,0 +1,28 @@
+<!-- Text-to-Speech Tool HTML -->
+<div id="text_to_speech-content" class="tab-content">
+  <div class="tool-description">
+    Convert text to speech for audio reading assistance.
+  </div>
+  <div class="input-group">
+    <label for="text_to_speech_text">Text to convert:</label>
+    <textarea id="text_to_speech_text" name="text" placeholder="Enter text to convert to speech..."></textarea>
+  </div>
+  <div class="input-group">
+    <label for="text_to_speech_voice">Voice Selection:</label>
+    <select id="text_to_speech_voice" name="voice">
+      <option value="default">Default Voice</option>
+      <option value="male">Male Voice</option>
+      <option value="female">Female Voice</option>
+    </select>
+  </div>
+  <div class="input-group">
+    <label for="text_to_speech_speed">Speech Speed:</label>
+    <select id="text_to_speech_speed" name="speed">
+      <option value="slow">Slow</option>
+      <option value="normal" selected>Normal</option>
+      <option value="fast">Fast</option>
+    </select>
+  </div>
+  <button id="text_to_speech-button" class="button">Convert to Speech</button>
+  <div id="text_to_speech-result" class="result"></div>
+</div>

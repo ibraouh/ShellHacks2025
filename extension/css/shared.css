@@ -1,0 +1,206 @@
+/* Shared styles for all tool tabs */
+body {
+  width: 500px;
+  min-height: 600px;
+  margin: 0;
+  padding: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f8f9fa;
+}
+
+.header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.tab-container {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background-color: white;
+  border-bottom: 1px solid #e0e0e0;
+  gap: 1px;
+}
+
+.tab {
+  padding: 16px 12px;
+  background: #f8f9fa;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  color: #666;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.tab:hover {
+  background-color: #e9ecef;
+  color: #333;
+}
+
+.tab.active {
+  color: #667eea;
+  border-bottom-color: #667eea;
+  background-color: white;
+  font-weight: 600;
+}
+
+.tab-content {
+  display: none;
+  padding: 25px;
+  background-color: white;
+  min-height: 450px;
+  overflow-y: auto;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+.tool-description {
+  color: #666;
+  font-size: 15px;
+  margin-bottom: 25px;
+  line-height: 1.5;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  border-left: 4px solid #667eea;
+}
+
+.button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  color: white;
+  padding: 14px 28px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 15px;
+  font-weight: 600;
+  margin: 15px 0;
+  cursor: pointer;
+  border-radius: 8px;
+  width: 100%;
+  transition: all 0.3s ease;
+  box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+}
+
+.button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+}
+
+.button:disabled {
+  background: #cccccc;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.result {
+  margin-top: 25px;
+  padding: 20px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background-color: #f8f9fa;
+  min-height: 50px;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.loading {
+  color: #666;
+  font-style: italic;
+}
+
+.success {
+  color: #28a745;
+  font-weight: 500;
+}
+
+.error {
+  color: #dc3545;
+  font-weight: 500;
+}
+
+.input-group {
+  margin-bottom: 20px;
+}
+
+.input-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #333;
+  font-size: 15px;
+}
+
+.input-group input,
+.input-group textarea,
+.input-group select {
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 15px;
+  box-sizing: border-box;
+  transition: all 0.3s ease;
+  background-color: white;
+}
+
+.input-group input:focus,
+.input-group textarea:focus,
+.input-group select:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  transform: translateY(-1px);
+}
+
+.input-group textarea {
+  resize: vertical;
+  min-height: 100px;
+  font-family: inherit;
+}
+
+.status-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+.status-indicator.ready {
+  background-color: #28a745;
+}
+
+.status-indicator.processing {
+  background-color: #ffc107;
+}
+
+.status-indicator.error {
+  background-color: #dc3545;
+}
+
+.loading-message {
+  text-align: center;
+  padding: 40px 20px;
+  color: #666;
+  font-style: italic;
+  font-size: 16px;
+}

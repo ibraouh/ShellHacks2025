@@ -1,0 +1,33 @@
+<!-- AI Alt Text Tool HTML -->
+<div id="ai_alt_text-content" class="tab-content">
+  <div class="tool-description">
+    Generate descriptive alt text for images using AI technology.
+  </div>
+  <div class="input-group">
+    <label for="ai_alt_text_url">Image URL:</label>
+    <input type="url" id="ai_alt_text_url" name="image_url" placeholder="https://example.com/image.jpg">
+  </div>
+  <div class="input-group">
+    <label for="ai_alt_text_context">Context (optional):</label>
+    <input type="text" id="ai_alt_text_context" name="context" placeholder="Describe the context of the image...">
+  </div>
+  <div class="input-group">
+    <label for="ai_alt_text_style">Description Style:</label>
+    <select id="ai_alt_text_style" name="style">
+      <option value="detailed">Detailed Description</option>
+      <option value="concise" selected>Concise Description</option>
+      <option value="technical">Technical Description</option>
+    </select>
+  </div>
+  <div class="input-group">
+    <label for="ai_alt_text_language">Output Language:</label>
+    <select id="ai_alt_text_language" name="language">
+      <option value="en">English</option>
+      <option value="es">Spanish</option>
+      <option value="fr">French</option>
+      <option value="de">German</option>
+    </select>
+  </div>
+  <button id="ai_alt_text-button" class="button">Generate Alt Text</button>
+  <div id="ai_alt_text-result" class="result"></div>
+</div>
