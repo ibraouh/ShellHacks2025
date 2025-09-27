@@ -30,7 +30,15 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["css/*.css", "css/*.png", "js/audio/*.js"],
+      "resources": [
+        "css/*.css", 
+        "css/*.png", 
+        "js/audio/*.js",
+        "assets/fonts/opendyslexic/*.woff2",
+        "assets/fonts/opendyslexic/*.woff",
+        "assets/fonts/opendyslexic/*.otf",
+        "assets/fonts/opendyslexic/*.eot"
+      ],
       "matches": ["<all_urls>"]
     }
   ]
