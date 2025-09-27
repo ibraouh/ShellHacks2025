@@ -215,6 +215,9 @@ class FloatingAccessibilityTools {
     // Load the specific tool using inline tool classes for reliability
     const toolInstance = this.getInlineTool(toolId);
     
+    // Pass shadow root reference to the tool instance
+    toolInstance.shadowRoot = this.shadowRoot;
+    
     // ========================================================================
     // TOOL UI RENDERING
     // ========================================================================
@@ -366,15 +369,39 @@ class FloatingAccessibilityTools {
           this.toolId = 'ai_alt_text';
           this.name = 'AI Alt Text';
           this.icon = '🖼️';
+          this.selectedImage = null;
+          this.isSelectingMode = false;
+          this.originalCursor = null;
         }
         
         getContent() {
           return `
             <div class="tool-content">
-              <div style="text-align: center; padding: 40px 20px;">
-                <div style="font-size: 48px; margin-bottom: 16px;">${this.icon}</div>
-                <div style="font-size: 16px; margin-bottom: 20px;">${this.name}</div>
-                <button class="button" id="test-api-btn">Test API Connection</button>
+              <div style="padding: 20px;">
+                <div style="margin-bottom: 5px;">
+                  <button class="button" id="select-photo-btn" style="width: 100%; margin-bottom: 10px; margin-top: 0px;">
+                    ${this.isSelectingMode ? 'Click to Stop Selecting' : 'Select Photo on Page'}
+                  </button>
+                  <div style="font-size: 12px; color: #666; text-align: center;">
+                    ${this.isSelectingMode ? 'Click on any photo to select it' : 'Click the button above to start selecting photos'}
+                  </div>
+                </div>
+                
+                <div id="selected-photo-info" style="display: none; margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 8px;">
+                  <div style="font-weight: bold; margin-bottom: 10px;">Selected Photo:</div>
+                  <div id="photo-preview" style="margin-bottom: 10px;"></div>
+                  <div id="photo-url" style="font-size: 12px; color: #666; word-break: break-all;"></div>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                  <button class="button" id="generate-alt-text-btn" disabled style="width: 100%; margin-bottom: 10px;">
+                    Generate Alt Text
+                  </button>
+                  <div style="font-size: 12px; color: #666; text-align: center;">
+                    Generate AI alt text for the selected photo
+                  </div>
+                </div>
+                
                 <div id="api-result" class="result" style="margin-top: 20px;"></div>
               </div>
             </div>
@@ -382,22 +409,193 @@ class FloatingAccessibilityTools {
         }
         
         setupEventListeners(container) {
-          const testBtn = container.querySelector('#test-api-btn');
+          const selectBtn = container.querySelector('#select-photo-btn');
+          const generateBtn = container.querySelector('#generate-alt-text-btn');
           const resultDiv = container.querySelector('#api-result');
-          testBtn.addEventListener('click', async () => {
-            await this.testAPI(resultDiv, testBtn);
+          
+          selectBtn.addEventListener('click', () => {
+            this.toggleSelectionMode(container);
+          });
+          
+          generateBtn.addEventListener('click', async () => {
+            await this.generateAltText(resultDiv, generateBtn);
+          });
+          
+          // Add global event listeners for photo selection
+          this.addPhotoSelectionListeners();
+        }
+        
+        toggleSelectionMode(container) {
+          this.isSelectingMode = !this.isSelectingMode;
+          const selectBtn = container.querySelector('#select-photo-btn');
+          const instructionText = container.querySelector('#select-photo-btn').nextElementSibling;
+          
+          if (this.isSelectingMode) {
+            selectBtn.textContent = 'Click to Stop Selecting';
+            instructionText.textContent = 'Click on any photo to select it';
+            this.enablePhotoSelection();
+          } else {
+            selectBtn.textContent = 'Select Photo on Page';
+            instructionText.textContent = 'Click the button above to start selecting photos';
+            this.disablePhotoSelection();
+          }
+        }
+        
+        enablePhotoSelection() {
+          // Store original cursor
+          this.originalCursor = document.body.style.cursor;
+          
+          // Add hover effects to all images
+          const images = document.querySelectorAll('img');
+          images.forEach(img => {
+            img.style.cursor = 'pointer';
+            img.style.outline = 'none';
+            img.style.transition = 'outline 0.2s ease';
+            
+            // Add hover effect
+            img.addEventListener('mouseenter', this.handleImageHover);
+            img.addEventListener('mouseleave', this.handleImageLeave);
+            img.addEventListener('click', this.handleImageClick);
+          });
+          
+          // Change cursor for the entire page
+          document.body.style.cursor = 'crosshair';
+        }
+        
+        disablePhotoSelection() {
+          // Restore original cursor
+          document.body.style.cursor = this.originalCursor;
+          
+          // Remove hover effects from all images
+          const images = document.querySelectorAll('img');
+          images.forEach(img => {
+            img.style.cursor = '';
+            img.style.outline = '';
+            img.style.transition = '';
+            
+            // Remove event listeners
+            img.removeEventListener('mouseenter', this.handleImageHover);
+            img.removeEventListener('mouseleave', this.handleImageLeave);
+            img.removeEventListener('click', this.handleImageClick);
           });
         }
         
-        async testAPI(resultDiv, button) {
+        handleImageHover = (event) => {
+          if (this.isSelectingMode) {
+            event.target.style.outline = '3px solid #007bff';
+            event.target.style.outlineOffset = '2px';
+          }
+        }
+        
+        handleImageLeave = (event) => {
+          if (this.isSelectingMode) {
+            event.target.style.outline = '';
+            event.target.style.outlineOffset = '';
+          }
+        }
+        
+        handleImageClick = (event) => {
+          if (this.isSelectingMode) {
+            event.preventDefault();
+            event.stopPropagation();
+            
+            this.selectImage(event.target);
+            this.isSelectingMode = false;
+            this.disablePhotoSelection();
+            
+            // Update UI using the shadow root reference
+            if (this.shadowRoot) {
+              const container = this.shadowRoot.querySelector('.tool-panel');
+              if (container) {
+                this.updateSelectionUI(container);
+              }
+            }
+          }
+        }
+        
+        selectImage(imgElement) {
+          // Get the image source URL
+          let imageUrl = imgElement.src;
+          
+          // If it's a data URL or relative URL, try to get the full URL
+          if (imageUrl.startsWith('data:') || imageUrl.startsWith('/')) {
+            imageUrl = imgElement.src;
+          } else if (imageUrl.startsWith('//')) {
+            imageUrl = window.location.protocol + imageUrl;
+          }
+          
+          this.selectedImage = {
+            element: imgElement,
+            url: imageUrl,
+            alt: imgElement.alt || '',
+            title: imgElement.title || ''
+          };
+          
+          console.log('Image selected:', this.selectedImage);
+        }
+        
+        updateSelectionUI(container) {
+          console.log('Updating selection UI, container:', container);
+          console.log('Selected image:', this.selectedImage);
+          
+          const selectBtn = container.querySelector('#select-photo-btn');
+          const instructionText = selectBtn.nextElementSibling;
+          const photoInfo = container.querySelector('#selected-photo-info');
+          const photoPreview = container.querySelector('#photo-preview');
+          const photoUrl = container.querySelector('#photo-url');
+          const generateBtn = container.querySelector('#generate-alt-text-btn');
+          
+          console.log('Found elements:', { selectBtn, instructionText, photoInfo, photoPreview, photoUrl, generateBtn });
+          
+          selectBtn.textContent = 'Select Different Photo';
+          instructionText.textContent = 'Click to select a different photo';
+          
+          if (this.selectedImage) {
+            console.log('Updating UI with selected image');
+            photoInfo.style.display = 'block';
+            
+            // Create a small preview of the selected image
+            const previewImg = document.createElement('img');
+            previewImg.src = this.selectedImage.url;
+            previewImg.style.maxWidth = '100px';
+            previewImg.style.maxHeight = '100px';
+            previewImg.style.borderRadius = '4px';
+            previewImg.style.objectFit = 'cover';
+            
+            photoPreview.innerHTML = '';
+            photoPreview.appendChild(previewImg);
+            
+            photoUrl.textContent = this.selectedImage.url;
+            generateBtn.disabled = false;
+          } else {
+            console.log('No selected image to display');
+          }
+        }
+        
+        addPhotoSelectionListeners() {
+          // This method is called when the tool is initialized
+          // The actual listeners are added/removed in enablePhotoSelection/disablePhotoSelection
+        }
+        
+        async generateAltText(resultDiv, button) {
+          if (!this.selectedImage) {
+            resultDiv.textContent = 'Please select a photo first';
+            resultDiv.className = 'result error';
+            return;
+          }
+          
           button.disabled = true;
-          resultDiv.textContent = 'Testing API connection...';
+          resultDiv.textContent = 'Generating alt text...';
           resultDiv.className = 'result loading';
+          
           try {
             const response = await fetch('http://localhost:8000/tools/ai_alt_text/process', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image_url: 'https://example.com/test.jpg', context: 'test image' })
+              body: JSON.stringify({ 
+                image_url: this.selectedImage.url, 
+                context: `Image alt: "${this.selectedImage.alt}", title: "${this.selectedImage.title}"`
+              })
             });
             const data = await response.json();
             resultDiv.textContent = `API Response: ${JSON.stringify(data, null, 2)}`;
