@@ -30,7 +30,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["css/*.css", "js/audio/*.js"],
+      "resources": ["css/*.css", "css/*.png", "js/audio/*.js"],
       "matches": ["<all_urls>"]
     }
   ]
