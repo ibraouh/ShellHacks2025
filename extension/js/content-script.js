@@ -9,6 +9,8 @@ class FloatingAccessibilityTools {
     // ========================================================================
     this.isExpanded = false;        // Whether the main panel is expanded
     this.currentTool = null;        // Currently active tool ID
+    this.textSimplificationState = null; // Reference to text simplification tool state
+    this.aiAltTextState = null;     // Reference to AI alt text tool state
     
     // ========================================================================
     // TOOL CONFIGURATION
@@ -180,6 +182,48 @@ class FloatingAccessibilityTools {
     }
   }
 
+  resetCurrentToolState() {
+    // Reset state for the currently active tool
+    if (this.currentTool === 'text_simplification') {
+      this.resetTextSimplificationState();
+    } else if (this.currentTool === 'ai_alt_text') {
+      this.resetAIAltTextState();
+    }
+    // Add other tool resets here as needed
+  }
+  
+  resetTextSimplificationState() {
+    // Reset text selection state globally
+    if (this.textSimplificationState) {
+      this.textSimplificationState.isSelectingMode = false;
+      this.textSimplificationState.disableTextSelection();
+      this.textSimplificationState.clearAllTextHighlighting();
+      this.textSimplificationState.selectedText = null;
+      
+      // Update the UI if the tool panel is still visible
+      const container = this.shadowRoot.querySelector('.tool-panel');
+      if (container) {
+        this.textSimplificationState.updateSelectionUI(container);
+      }
+    }
+  }
+  
+  resetAIAltTextState() {
+    // Reset image selection state globally
+    if (this.aiAltTextState) {
+      this.aiAltTextState.isSelectingMode = false;
+      this.aiAltTextState.disablePhotoSelection();
+      this.aiAltTextState.clearAllPhotoHighlighting();
+      this.aiAltTextState.selectedImage = null;
+      
+      // Update the UI if the tool panel is still visible
+      const container = this.shadowRoot.querySelector('.tool-panel');
+      if (container) {
+        this.aiAltTextState.updateSelectionUI(container);
+      }
+    }
+  }
+
   closePanel() {
     // Completely remove the floating UI from the page
     this.shadowHost.remove();
@@ -217,6 +261,13 @@ class FloatingAccessibilityTools {
     
     // Pass shadow root reference to the tool instance
     toolInstance.shadowRoot = this.shadowRoot;
+    
+    // Store tool instance reference for state management
+    if (toolId === 'text_simplification') {
+      this.textSimplificationState = toolInstance;
+    } else if (toolId === 'ai_alt_text') {
+      this.aiAltTextState = toolInstance;
+    }
     
     // ========================================================================
     // TOOL UI RENDERING
@@ -577,6 +628,36 @@ class FloatingAccessibilityTools {
           // The actual listeners are added/removed in enablePhotoSelection/disablePhotoSelection
         }
         
+        clearAllPhotoHighlighting() {
+          // Remove all highlighting from image elements
+          const images = document.querySelectorAll('img');
+          images.forEach(img => {
+            img.style.outline = '';
+            img.style.outlineOffset = '';
+            img.style.backgroundColor = '';
+          });
+        }
+        
+        updateSelectionUI(container) {
+          const selectBtn = container.querySelector('#select-photo-btn');
+          const instructionText = selectBtn.nextElementSibling;
+          const photoInfo = container.querySelector('#selected-photo-info');
+          const generateBtn = container.querySelector('#generate-alt-text-btn');
+          
+          if (selectBtn) {
+            selectBtn.textContent = 'Select Photo on Page';
+            instructionText.textContent = 'Click the button above to start selecting photos';
+          }
+          
+          if (photoInfo) {
+            photoInfo.style.display = 'none';
+          }
+          
+          if (generateBtn) {
+            generateBtn.disabled = true;
+          }
+        }
+        
         async generateAltText(resultDiv, button) {
           if (!this.selectedImage) {
             resultDiv.textContent = 'Please select a photo first';
@@ -730,9 +811,9 @@ class FloatingAccessibilityTools {
         getContent() {
           return `
             <div class="tool-content">
-              <div style="padding: 20px;">
+              <div style="padding: 20px; padding-bottom: 0px;">
                 <div style="margin-bottom: 20px;">
-                  <button class="button" id="select-text-btn" style="width: 100%; margin-bottom: 10px;">
+                  <button class="button" id="select-text-btn" style="width: 100%; margin-bottom: 10px; margin-top: 0px;">
                     ${this.isSelectingMode ? 'Click to Stop Selecting' : 'Select Text to Simplify'}
                   </button>
                   <div style="font-size: 12px; color: #666; text-align: center;">
@@ -769,12 +850,11 @@ class FloatingAccessibilityTools {
                   <button class="button" id="simplify-text-btn" disabled style="width: 100%; margin-bottom: 10px;">
                     Simplify Selected Text
                   </button>
-                  <div style="font-size: 12px; color: #666; text-align: center;">
+                  <div id="simplify-status" style="font-size: 12px; color: #666; text-align: center;">
                     Simplify the selected text using AI
                   </div>
                 </div>
                 
-                <div id="api-result" class="result" style="margin-top: 20px;"></div>
               </div>
             </div>
           `;
@@ -783,7 +863,6 @@ class FloatingAccessibilityTools {
         setupEventListeners(container) {
           const selectBtn = container.querySelector('#select-text-btn');
           const simplifyBtn = container.querySelector('#simplify-text-btn');
-          const resultDiv = container.querySelector('#api-result');
           const simplificationTypeSelect = container.querySelector('#simplification-type');
           const readingLevelSelect = container.querySelector('#reading-level');
           
@@ -792,7 +871,7 @@ class FloatingAccessibilityTools {
           });
           
           simplifyBtn.addEventListener('click', async () => {
-            await this.simplifyText(resultDiv, simplifyBtn);
+            await this.simplifyText(simplifyBtn);
           });
           
           simplificationTypeSelect.addEventListener('change', (e) => {
@@ -1009,8 +1088,13 @@ class FloatingAccessibilityTools {
             
             textPreview.textContent = previewText;
             simplifyBtn.disabled = false;
+            
+            // Reset status message
+            this.updateStatusMessage('Simplify the selected text using AI', 'default');
           } else {
             console.log('No selected text to display');
+            // Reset status message when no text is selected
+            this.updateStatusMessage('Simplify the selected text using AI', 'default');
           }
         }
         
@@ -1019,18 +1103,46 @@ class FloatingAccessibilityTools {
           // The actual listeners are added/removed in enableTextSelection/disableTextSelection
         }
         
-        async simplifyText(resultDiv, button) {
+        updateStatusMessage(message, type) {
+          if (this.shadowRoot) {
+            const statusElement = this.shadowRoot.querySelector('#simplify-status');
+            if (statusElement) {
+              statusElement.textContent = message;
+              
+              // Update color based on type
+              switch (type) {
+                case 'success':
+                  statusElement.style.color = '#28a745';
+                  break;
+                case 'error':
+                  statusElement.style.color = '#dc3545';
+                  break;
+                case 'loading':
+                  statusElement.style.color = '#007bff';
+                  break;
+                default:
+                  statusElement.style.color = '#666';
+              }
+            }
+          }
+        }
+        
+        async simplifyText(button) {
           if (!this.selectedText) {
-            resultDiv.textContent = 'Please select text first';
-            resultDiv.className = 'result error';
+            this.updateStatusMessage('Please select text first', 'error');
             return;
           }
           
           button.disabled = true;
-          resultDiv.textContent = 'Simplifying text...';
-          resultDiv.className = 'result loading';
+          this.updateStatusMessage('Simplifying text...', 'loading');
           
           try {
+            console.log('Sending request to API:', {
+              text: this.selectedText.text,
+              simplification_type: this.simplificationType,
+              reading_level: this.readingLevel
+            });
+            
             const response = await fetch('http://localhost:8000/tools/text_simplification/process', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1040,20 +1152,21 @@ class FloatingAccessibilityTools {
                 reading_level: this.readingLevel
               })
             });
+            
+            console.log('API response status:', response.status);
             const data = await response.json();
+            console.log('API response data:', data);
             
             if (data.success) {
               // Replace the original text with simplified version
               this.replaceTextWithSimplified(data.data.simplified_text);
-              resultDiv.textContent = 'Text simplified successfully!';
-              resultDiv.className = 'result success';
+              this.updateStatusMessage('Text replaced!', 'success');
             } else {
-              resultDiv.textContent = `Error: ${data.message}`;
-              resultDiv.className = 'result error';
+              this.updateStatusMessage(`Error: ${data.message}`, 'error');
             }
           } catch (error) {
-            resultDiv.textContent = `Error: ${error.message}`;
-            resultDiv.className = 'result error';
+            console.error('API call failed:', error);
+            this.updateStatusMessage(`Error: ${error.message}`, 'error');
           } finally {
             button.disabled = false;
           }
@@ -1123,6 +1236,12 @@ class FloatingAccessibilityTools {
       toolsGrid.style.opacity = '1';
     }
     
+    // Reset tool-specific state when closing any tool
+    this.resetCurrentToolState();
+    
+    // Clear tool state references
+    this.textSimplificationState = null;
+    this.aiAltTextState = null;
     this.currentTool = null;
   }
 

@@ -5,6 +5,16 @@
   box-sizing: border-box;
 }
 
+/* Hide scrollbars but keep scrolling functionality */
+* {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* Internet Explorer 10+ */
+}
+
+*::-webkit-scrollbar {
+  display: none; /* WebKit browsers (Chrome, Safari, Edge) */
+}
+
 .main-button {
   width: 64px;
   height: 64px;
