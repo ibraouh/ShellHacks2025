@@ -598,11 +598,11 @@ class FloatingAccessibilityTools {
           
           console.log('Found elements:', { selectBtn, instructionText, photoInfo, photoPreview, photoUrl, generateBtn });
           
-          selectBtn.textContent = 'Select Different Photo';
-          instructionText.textContent = 'Click to select a different photo';
-          
           if (this.selectedImage) {
             console.log('Updating UI with selected image');
+            selectBtn.textContent = 'Select Different Photo';
+            instructionText.textContent = 'Click to select a different photo';
+            
             photoInfo.style.display = 'block';
             
             // Create a small preview of the selected image
@@ -620,6 +620,10 @@ class FloatingAccessibilityTools {
             generateBtn.disabled = false;
           } else {
             console.log('No selected image to display');
+            selectBtn.textContent = 'Select Photo on Page';
+            instructionText.textContent = 'Click the button above to start selecting photos';
+            photoInfo.style.display = 'none';
+            generateBtn.disabled = true;
           }
         }
         
@@ -638,25 +642,6 @@ class FloatingAccessibilityTools {
           });
         }
         
-        updateSelectionUI(container) {
-          const selectBtn = container.querySelector('#select-photo-btn');
-          const instructionText = selectBtn.nextElementSibling;
-          const photoInfo = container.querySelector('#selected-photo-info');
-          const generateBtn = container.querySelector('#generate-alt-text-btn');
-          
-          if (selectBtn) {
-            selectBtn.textContent = 'Select Photo on Page';
-            instructionText.textContent = 'Click the button above to start selecting photos';
-          }
-          
-          if (photoInfo) {
-            photoInfo.style.display = 'none';
-          }
-          
-          if (generateBtn) {
-            generateBtn.disabled = true;
-          }
-        }
         
         async generateAltText(resultDiv, button) {
           if (!this.selectedImage) {
