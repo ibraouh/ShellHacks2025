@@ -1449,7 +1449,7 @@ class FloatingAccessibilityTools {
               })
             });
             const data = await response.json();
-            resultDiv.textContent = `API Response: ${JSON.stringify(data, null, 2)}`;
+            resultDiv.textContent = `${data.data.alt_text}`;
             resultDiv.className = 'result success';
           } catch (error) {
             resultDiv.textContent = `Error: ${error.message}`;
