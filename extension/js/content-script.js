@@ -18,12 +18,11 @@ class FloatingAccessibilityTools {
     // Add new tools here - each tool needs: id, name, icon
     // The id must match the tool class name in getInlineTool() method
     this.tools = [
-      { id: 'text_to_speech', name: 'Text-to-Speech', icon: '🔊' },
-      { id: 'speech_to_instructions', name: 'Speech Commands', icon: '🎤' },
-      { id: 'ai_alt_text', name: 'AI Alt Text', icon: '🖼️' },
-      { id: 'adaptive_css', name: 'CSS Adjust', icon: '🎨' },
-      { id: 'semantic_search', name: 'Search', icon: '🔍' },
-      { id: 'text_simplification', name: 'Simplify Text', icon: '📝' }
+      { id: 'speech_to_instructions', name: 'Speech Commands', icon: '🎤', span: 2, description: 'Control the page with voice commands' },
+      { id: 'ai_alt_text', name: 'AI Alt Text', icon: '🖼️', description: 'Generate image descriptions' },
+      { id: 'adaptive_css', name: 'CSS Adjust', icon: '🎨', description: 'Customize page appearance' },
+      { id: 'semantic_search', name: 'Search', icon: '🔍', description: 'Find content semantically' },
+      { id: 'text_simplification', name: 'Simplify Text', icon: '📝', description: 'Make text easier to read' }
     ];
     
     this.init();
@@ -107,8 +106,19 @@ class FloatingAccessibilityTools {
     // ========================================================================
     const header = document.createElement('div');
     header.className = 'panel-header';
+    // Get extension URLs for images
+    const adkImageUrl = chrome.runtime.getURL('css/adk.png');
+    const geminiImageUrl = chrome.runtime.getURL('css/gemini.png');
+    
     header.innerHTML = `
       <div class="panel-title">A11y Tools</div>
+      <div class="powered-by">
+        <span class="powered-by-text">Powered by</span>
+        <div class="powered-by-logos">
+          <img src="${adkImageUrl}" alt="ADK" class="powered-by-logo">
+          <img src="${geminiImageUrl}" alt="Gemini" class="powered-by-logo">
+        </div>
+      </div>
       <div class="panel-controls">
         <span class="quit-text" title="Close">quit</span>
       </div>
@@ -124,9 +134,13 @@ class FloatingAccessibilityTools {
     this.tools.forEach(tool => {
       const toolItem = document.createElement('button');
       toolItem.className = 'tool-item';
+      if (tool.span) {
+        toolItem.style.gridColumn = `span ${tool.span}`;
+      }
       toolItem.innerHTML = `
         <div class="tool-icon">${tool.icon}</div>
         <div class="tool-name">${tool.name}</div>
+        <div class="tool-description">${tool.description || ''}</div>
       `;
       toolItem.addEventListener('click', () => this.openTool(tool.id));
       toolsGrid.appendChild(toolItem);
@@ -308,58 +322,6 @@ class FloatingAccessibilityTools {
   
   getInlineTool(toolId) {
     const toolClasses = {
-      // ========================================================================
-      // TEXT-TO-SPEECH TOOL
-      // ========================================================================
-      'text_to_speech': class TextToSpeechTool {
-        constructor() {
-          this.toolId = 'text_to_speech';
-          this.name = 'Text-to-Speech';
-          this.icon = '🔊';
-        }
-        
-        getContent() {
-          return `
-            <div class="tool-content">
-              <div style="text-align: center; padding: 40px 20px;">
-                <div style="font-size: 48px; margin-bottom: 16px;">${this.icon}</div>
-                <div style="font-size: 16px; margin-bottom: 20px;">${this.name}</div>
-                <button class="button" id="test-api-btn">Test API Connection</button>
-                <div id="api-result" class="result" style="margin-top: 20px;"></div>
-              </div>
-            </div>
-          `;
-        }
-        
-        setupEventListeners(container) {
-          const testBtn = container.querySelector('#test-api-btn');
-          const resultDiv = container.querySelector('#api-result');
-          testBtn.addEventListener('click', async () => {
-            await this.testAPI(resultDiv, testBtn);
-          });
-        }
-        
-        async testAPI(resultDiv, button) {
-          button.disabled = true;
-          resultDiv.textContent = 'Testing API connection...';
-          resultDiv.className = 'result loading';
-          try {
-            const response = await fetch('http://localhost:8000/tools/text_to_speech/process', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: 'Hello, this is a test message.' })
-            });
-            const data = await response.json();
-            resultDiv.textContent = `API Response: ${JSON.stringify(data, null, 2)}`;
-            resultDiv.className = 'result success';
-          } catch (error) {
-            resultDiv.textContent = `Error: ${error.message}`;
-            resultDiv.className = 'result error';
-          } finally {
-            button.disabled = false;
-          }
-        }
-      },
       // ========================================================================
       // SPEECH-TO-INSTRUCTIONS TOOL
       // ========================================================================
@@ -555,7 +517,6 @@ class FloatingAccessibilityTools {
               console.log('Detected direct JSON action:', text);
               return;
             }
-            
             // Check if this is a system action message (not a chat message)
             if (this.isSystemActionMessage(text)) {
               console.log('Detected system action message:', text);
@@ -1551,54 +1512,412 @@ class FloatingAccessibilityTools {
         }
       },
       // ========================================================================
-      // SEMANTIC SEARCH TOOL
+      // WEBSITE SEARCH TOOL
       // ========================================================================
-      'semantic_search': class SemanticSearchTool {
+      'semantic_search': class WebsiteSearchTool {
         constructor() {
           this.toolId = 'semantic_search';
           this.name = 'Search';
           this.icon = '🔍';
+          this.sessionId = Math.random().toString().substring(10);
+          this.eventSource = null;
+          this.currentMessageId = null;
+          this.messageBuffer = "";
+          this.container = null;
+          this.websiteContent = null;
+          this.isContentExtracted = false;
         }
         
         getContent() {
           return `
-            <div class="tool-content">
-              <div style="text-align: center; padding: 40px 20px;">
-                <div style="font-size: 48px; margin-bottom: 16px;">${this.icon}</div>
-                <div style="font-size: 16px; margin-bottom: 20px;">${this.name}</div>
-                <button class="button" id="test-api-btn">Test API Connection</button>
-                <div id="api-result" class="result" style="margin-top: 20px;"></div>
+            <div class="tool-content" style="height: 100%; display: flex; flex-direction: column; margin-bottom: 0px; padding-bottom: 0px;">
+                <!-- Chat Messages -->
+                <div id="search-chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; min-height: 0; max-height: calc(100% - 180px);">
+                </div>
+              
+              <!-- Input Area -->
+              <div style="border-top: 1px solid #e0e0e0; background: white; padding: 8px 8px; flex-shrink: 0;">
+                <!-- Text Input -->
+                <div id="search-text-mode">
+                  <div style="display: flex; gap: 8px; margin-bottom: 2px;">
+                    <input type="text" id="search-text-input" placeholder="Ask a question about this webpage..." 
+                           style="flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 20px; font-size: 14px; height: 40px; outline: none; transition: border-color 0.2s;"
+                           onfocus="this.style.borderColor='#667eea'" onblur="this.style.borderColor='#ddd'">
+                    <button class="button" id="send-search-btn" style="padding: 8px 0px; border-radius: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; color: white; font-size: 16px; cursor: pointer; transition: transform 0.2s; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; margin: 0px;" 
+                            onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">↵</button>
+                  </div>
+                </div>
+                
+                <!-- Status -->
+                <div style="text-align: center;">
+                  <div id="search-status" style="margin-top: 5px;padding: 6px 14px; border-radius: 20px; background: #f4f6fb; border: 1px solid #ddd; color: #666; font-size: 12px; display: inline-block;">
+                    Ready to search this webpage
+                  </div>
+                </div>
               </div>
             </div>
           `;
         }
         
         setupEventListeners(container) {
-          const testBtn = container.querySelector('#test-api-btn');
-          const resultDiv = container.querySelector('#api-result');
-          testBtn.addEventListener('click', async () => {
-            await this.testAPI(resultDiv, testBtn);
+          console.log('Setting up event listeners for search container:', container);
+          this.container = container;
+          
+          const textInput = container.querySelector('#search-text-input');
+          const sendBtn = container.querySelector('#send-search-btn');
+          const chatMessages = container.querySelector('#search-chat-messages');
+          const statusDiv = container.querySelector('#search-status');
+          
+          console.log('Found search elements:', {
+            textInput, sendBtn, chatMessages, statusDiv
           });
+          
+          // Text input
+          sendBtn.addEventListener('click', () => {
+            const text = textInput.value.trim();
+            if (text) {
+              this.sendSearchQuery(text);
+              textInput.value = '';
+            }
+          });
+          
+          textInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+              const text = textInput.value.trim();
+              if (text) {
+                this.sendSearchQuery(text);
+                textInput.value = '';
+              }
+            }
+          });
+          
+          
+          // Initialize SSE connection after a short delay
+          setTimeout(() => {
+            this.connectSSE();
+          }, 100);
+          
+          // Extract website content when tool opens
+          setTimeout(() => {
+            this.extractWebsiteContent();
+          }, 200);
         }
         
-        async testAPI(resultDiv, button) {
-          button.disabled = true;
-          resultDiv.textContent = 'Testing API connection...';
-          resultDiv.className = 'result loading';
+        connectSSE() {
+          const sseUrl = `http://localhost:8000/search/events/${this.sessionId}`;
+          console.log('Connecting to search SSE:', sseUrl);
+          this.eventSource = new EventSource(sseUrl);
+          
+          this.eventSource.onopen = () => {
+            console.log('Search SSE connection opened');
+            this.updateStatus('Connected to search agent', 'success');
+          };
+          
+          this.eventSource.onmessage = (event) => {
+            console.log('Raw search SSE message:', event.data);
+            try {
+              const message = JSON.parse(event.data);
+              console.log('Parsed search SSE message:', message);
+              this.handleSSEMessage(message);
+            } catch (e) {
+              console.error('Error parsing search SSE message:', e, 'Raw data:', event.data);
+            }
+          };
+          
+          this.eventSource.onerror = (event) => {
+            console.error('Search SSE connection error:', event);
+            this.updateStatus('Connection lost, reconnecting...', 'error');
+            setTimeout(() => this.connectSSE(), 5000);
+          };
+        }
+        
+        handleSSEMessage(message) {
+          console.log('Handling search SSE message:', message);
+          
+          if (message.turn_complete) {
+            console.log('Search turn complete, clearing message buffer');
+            this.currentMessageId = null;
+            this.messageBuffer = "";
+            // Update status back to ready
+            this.updateStatus('Ready to search this webpage', 'success');
+            return;
+          }
+          
+          if (message.mime_type === "text/plain") {
+            console.log('Processing search text message:', message.data);
+            this.messageBuffer += message.data;
+            
+            
+            // Add text to results
+            if (this.currentMessageId === null) {
+              this.currentMessageId = 'msg_' + Math.random().toString(36).substring(2, 9);
+              console.log('Creating new search message element with ID:', this.currentMessageId);
+              this.addChatMessage('', 'agent', this.currentMessageId);
+            }
+            
+            // Find the message element within the container
+            let messageElement = null;
+            if (this.container) {
+              try {
+                messageElement = this.container.querySelector(`[id="${this.currentMessageId}"]`);
+              } catch (e) {
+                console.error('Invalid selector for message ID:', this.currentMessageId, e);
+                messageElement = null;
+              }
+            }
+            
+            if (messageElement) {
+              console.log('Updating search message element with:', message.data);
+              // Find the text div within the message bubble
+              const textDiv = messageElement.querySelector('div[style*="color: #333"]');
+              if (textDiv) {
+                textDiv.textContent += message.data;
+              } else {
+                // Fallback: update the entire message content
+                messageElement.textContent += message.data;
+              }
+            } else {
+              console.error('Search message element not found with ID:', this.currentMessageId);
+              // Fallback: add the text directly to results
+              this.addChatMessage(message.data, 'agent');
+            }
+          }
+        }
+        
+        
+        async extractWebsiteContent() {
+          console.log('Extracting website content...');
+          this.updateStatus('Extracting webpage content...', 'loading');
+          
           try {
-            const response = await fetch('http://localhost:8000/tools/semantic_search/process', {
+            // Extract the main content from the webpage
+            const content = this.getWebsiteContent();
+            this.websiteContent = content;
+            this.isContentExtracted = true;
+            
+            console.log('Website content extracted:', content.length, 'characters');
+            this.updateStatus('Ready to search this webpage', 'success');
+            
+            // Send the content to the agent
+            await this.sendWebsiteContentToAgent(content);
+            
+          } catch (error) {
+            console.error('Error extracting website content:', error);
+            this.updateStatus('Error extracting content', 'error');
+          }
+        }
+        
+        getWebsiteContent() {
+          // Extract meaningful content from the webpage
+          const content = {
+            url: window.location.href,
+            title: document.title,
+            text: '',
+            headings: [],
+            links: [],
+            images: [],
+            buttons: []
+          };
+          
+          // Extract main text content
+          const textElements = document.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, article, section');
+          const textParts = [];
+          
+          textElements.forEach(element => {
+            const text = element.textContent.trim();
+            if (text.length > 3) { // Include more text, even shorter ones
+              textParts.push(text);
+            }
+          });
+          
+          content.text = textParts.join('\n\n');
+          
+          // Extract headings
+          const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+          headings.forEach(heading => {
+              content.headings.push({
+                level: heading.tagName.toLowerCase(),
+              text: heading.textContent.trim()
+            });
+          });
+          
+          // Extract links
+          const links = document.querySelectorAll('a[href]');
+          links.forEach(link => {
+            if (link.textContent.trim()) {
+              content.links.push({
+                text: link.textContent.trim(),
+                href: link.href
+              });
+            }
+          });
+          
+          // Extract images
+          const images = document.querySelectorAll('img[src]');
+          images.forEach(img => {
+              content.images.push({
+                src: img.src,
+              alt: img.alt || '',
+              title: img.title || ''
+            });
+          });
+          
+          // Extract buttons and clickable elements
+          const buttons = document.querySelectorAll('button, input[type="button"], input[type="submit"], input[type="reset"], [role="button"]');
+          buttons.forEach(button => {
+            const text = button.textContent.trim() || button.value || button.getAttribute('aria-label') || '';
+            if (text) {
+              content.buttons.push({
+                text: text,
+                type: button.tagName.toLowerCase(),
+                id: button.id || '',
+                className: button.className || ''
+              });
+            }
+          });
+          
+          // Also extract any elements with onclick handlers
+          const clickableElements = document.querySelectorAll('[onclick]');
+          clickableElements.forEach(element => {
+            const text = element.textContent.trim();
+            if (text && !content.buttons.some(btn => btn.text === text)) {
+              content.buttons.push({
+                text: text,
+                type: element.tagName.toLowerCase(),
+                id: element.id || '',
+                className: element.className || '',
+                onclick: 'has onclick handler'
+              });
+            }
+          });
+          
+          return content;
+        }
+        
+        async sendWebsiteContentToAgent(content) {
+          try {
+            // Only send the essential text content to avoid rate limits
+            const contentData = `Website content extracted:\n\nURL: ${content.url}\nTitle: ${content.title}\n\nText Content:\n${content.text}`;
+            
+            console.log('Sending website content to agent (text only):', contentData.length, 'characters');
+            
+            const response = await fetch(`http://localhost:8000/search/send/${this.sessionId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: 'test search' })
+              body: JSON.stringify({
+                mime_type: "text/plain",
+                data: contentData
+              })
             });
-            const data = await response.json();
-            resultDiv.textContent = `API Response: ${JSON.stringify(data, null, 2)}`;
-            resultDiv.className = 'result success';
+            
+            if (response.ok) {
+              console.log('Website content sent to search agent successfully');
+            } else {
+              console.error('Failed to send website content:', response.status, response.statusText);
+            }
           } catch (error) {
-            resultDiv.textContent = `Error: ${error.message}`;
-            resultDiv.className = 'result error';
-          } finally {
-            button.disabled = false;
+            console.error('Error sending website content:', error);
+            this.updateStatus('Error sending content to agent', 'error');
+          }
+        }
+        
+        async sendSearchQuery(text) {
+          try {
+            this.addChatMessage(text, 'user');
+            this.updateStatus('Searching...', 'loading');
+            
+            const response = await fetch(`http://localhost:8000/search/send/${this.sessionId}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                mime_type: "text/plain",
+                data: text
+              })
+            });
+            
+            if (response.ok) {
+              console.log('Search query sent to agent');
+            }
+          } catch (error) {
+            this.updateStatus(`Error: ${error.message}`, 'error');
+          }
+        }
+        
+        
+        addChatMessage(text, sender = 'agent', id = null) {
+          if (!this.container) {
+            console.error('Search container not available for addChatMessage');
+            return;
+          }
+          
+          const chatMessages = this.container.querySelector('#search-chat-messages');
+          if (!chatMessages) {
+            console.error('Search chat messages div not found in container!');
+            return;
+          }
+          
+          const messageDiv = document.createElement('div');
+          messageDiv.className = `chat-message ${sender}`;
+          messageDiv.style.marginBottom = '15px';
+          if (id) messageDiv.id = id;
+          
+          if (sender === 'user') {
+            messageDiv.innerHTML = `
+              <div style="display: flex; justify-content: flex-end;">
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 12px; border-radius: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 80%;">
+                  <div style="font-size: 14px; line-height: 1.4;">${text}</div>
+                </div>
+              </div>
+            `;
+          } else {
+            messageDiv.innerHTML = `
+              <div style="display: flex;">
+                <div style="background: white; padding: 8px 12px; border-radius: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 80%;">
+                  <div style="color: #333; font-size: 14px; line-height: 1.4;">${text}</div>
+                </div>
+              </div>
+            `;
+          }
+          
+          chatMessages.appendChild(messageDiv);
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        updateStatus(message, type = 'info') {
+          if (!this.container) {
+            console.error('Search container not available for updateStatus');
+            return;
+          }
+          
+          const statusElement = this.container.querySelector('#search-status');
+          if (!statusElement) {
+            console.error('Search status element not found!');
+            return;
+          }
+          
+          statusElement.textContent = message;
+          
+          // Update color based on type
+          switch (type) {
+            case 'success':
+              statusElement.style.backgroundColor = '#d4edda';
+              statusElement.style.color = '#155724';
+              statusElement.style.borderColor = '#c3e6cb';
+              break;
+            case 'error':
+              statusElement.style.backgroundColor = '#f8d7da';
+              statusElement.style.color = '#721c24';
+              statusElement.style.borderColor = '#f5c6cb';
+              break;
+            case 'loading':
+              statusElement.style.backgroundColor = '#d1ecf1';
+              statusElement.style.color = '#0c5460';
+              statusElement.style.borderColor = '#bee5eb';
+              break;
+            default:
+              statusElement.style.backgroundColor = '#f4f6fb';
+              statusElement.style.color = '#666';
+              statusElement.style.borderColor = '#ddd';
           }
         }
       },

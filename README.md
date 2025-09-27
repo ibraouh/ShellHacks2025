@@ -43,12 +43,11 @@
 
 ## Available Tools
 
-1. **Text-to-Speech Reading**: Convert text to speech for audio reading assistance
-2. **Speech-to-Instructions Navigation**: Convert speech to navigation instructions
-3. **AI-Generated Alt Text for Images**: Generate descriptive alt text using AI
-4. **Adaptive CSS Adjustments for Readability**: Adjust CSS based on user preferences
-5. **Semantic Search and Content Discovery**: Find content using semantic search
-6. **Simplified Rewording of Complex Text**: Simplify complex text for better readability
+1. **Speech-to-Instructions Navigation**: Convert speech to navigation instructions
+2. **AI-Generated Alt Text for Images**: Generate descriptive alt text using AI
+3. **Adaptive CSS Adjustments for Readability**: Adjust CSS based on user preferences
+4. **Semantic Search and Content Discovery**: Find content using semantic search
+5. **Simplified Rewording of Complex Text**: Simplify complex text for better readability
 
 # Adding a New Tool/Tab
 
@@ -195,7 +194,6 @@ class YourToolNameTool(BaseTool):
 Add your tool ID to the `toolIds` array:
 ```javascript
 const toolIds = [
-  'text_to_speech',
   'speech_to_instructions', 
   'ai_alt_text',
   'adaptive_css',

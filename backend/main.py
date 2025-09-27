@@ -20,7 +20,6 @@ from google.genai import types
 from google.genai.types import Part, Content, Blob
 
 # Import all tools
-from tools.text_to_speech import TextToSpeechTool, TextToSpeechRequest
 from tools.speech_to_instructions import SpeechToInstructionsTool, SpeechToInstructionsRequest
 from tools.ai_alt_text import AIAltTextTool, AIAltTextRequest
 from tools.adaptive_css import AdaptiveCSSTool, AdaptiveCSSRequest
@@ -29,6 +28,7 @@ from tools.text_simplification import TextSimplificationTool, TextSimplification
 
 # Import agents
 from agents.speech_commands_agent import speech_commands_agent
+from agents.website_search_agent import website_search_agent
 
 app = FastAPI(title="Accessibility Tools API", version="1.0.0")
 
@@ -43,7 +43,6 @@ app.add_middleware(
 
 # Initialize all tools
 tools = {
-    "text_to_speech": TextToSpeechTool(),
     "speech_to_instructions": SpeechToInstructionsTool(),
     "ai_alt_text": AIAltTextTool(),
     "adaptive_css": AdaptiveCSSTool(),
@@ -106,6 +105,37 @@ async def start_agent_session(user_id, is_audio=False):
         session_resumption=types.SessionResumptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         input_audio_transcription=types.AudioTranscriptionConfig(),
+    )
+
+    # Create a LiveRequestQueue for this session
+    live_request_queue = LiveRequestQueue()
+
+    # Start agent session
+    live_events = runner.run_live(
+        session=session,
+        live_request_queue=live_request_queue,
+        run_config=run_config,
+    )
+    return live_events, live_request_queue
+
+async def start_search_agent_session(user_id):
+    """Starts a website search agent session"""
+    # Create a Runner
+    runner = InMemoryRunner(
+        app_name="Website Search Tool",
+        agent=website_search_agent,
+    )
+
+    # Create a Session
+    session = await runner.session_service.create_session(
+        app_name="Website Search Tool",
+        user_id=user_id,
+    )
+
+    # Set response modality to text only for search
+    run_config = RunConfig(
+        response_modalities=[types.Modality.TEXT],
+        session_resumption=types.SessionResumptionConfig(),
     )
 
     # Create a LiveRequestQueue for this session
@@ -229,6 +259,73 @@ async def send_message_endpoint(user_id: int, request: Request):
     return {"status": "sent"}
 
 # =============================================================================
+# SSE ENDPOINTS FOR WEBSITE SEARCH
+# =============================================================================
+
+@app.get("/search/events/{user_id}")
+async def search_sse_endpoint(user_id: str):
+    """SSE endpoint for website search agent to client communication"""
+    # Start search agent session
+    user_id_str = str(user_id)
+    live_events, live_request_queue = await start_search_agent_session(user_id_str)
+
+    # Store the request queue for this user
+    active_sessions[f"search_{user_id_str}"] = live_request_queue
+
+    print(f"Search client #{user_id} connected via SSE")
+
+    def cleanup():
+        live_request_queue.close()
+        if f"search_{user_id_str}" in active_sessions:
+            del active_sessions[f"search_{user_id_str}"]
+        print(f"Search client #{user_id} disconnected from SSE")
+
+    async def event_generator():
+        try:
+            async for data in agent_to_client_sse(live_events):
+                yield data
+        except Exception as e:
+            print(f"Error in search SSE stream: {e}")
+        finally:
+            cleanup()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Cache-Control"
+        }
+    )
+
+@app.post("/search/send/{user_id}")
+async def search_send_message_endpoint(user_id: str, request: Request):
+    """HTTP endpoint for client to search agent communication"""
+    user_id_str = str(user_id)
+
+    # Get the live request queue for this user
+    live_request_queue = active_sessions.get(f"search_{user_id_str}")
+    if not live_request_queue:
+        return {"error": "Search session not found"}
+
+    # Parse the message
+    message = await request.json()
+    mime_type = message["mime_type"]
+    data = message["data"]
+
+    # Send the message to the agent
+    if mime_type == "text/plain":
+        content = Content(role="user", parts=[Part.from_text(text=data)])
+        live_request_queue.send_content(content=content)
+        print(f"[SEARCH CLIENT TO AGENT]: {data}")
+    else:
+        return {"error": f"Mime type not supported: {mime_type}"}
+
+    return {"status": "sent"}
+
+# =============================================================================
 # EXISTING ENDPOINTS
 # =============================================================================
 
@@ -251,9 +348,7 @@ async def process_tool(tool_id: str, request_data: Dict[str, Any]):
     
     try:
         # Create appropriate request object based on tool type
-        if tool_id == "text_to_speech":
-            request = TextToSpeechRequest(**request_data)
-        elif tool_id == "speech_to_instructions":
+        if tool_id == "speech_to_instructions":
             request = SpeechToInstructionsRequest(**request_data)
         elif tool_id == "ai_alt_text":
             request = AIAltTextRequest(**request_data)
