@@ -13,6 +13,8 @@ class FloatingAccessibilityTools {
     this.aiAltTextState = null;     // Reference to AI alt text tool state
     this.toolInstances = {};        // Cache for tool instances to prevent recreation
     
+    // (Form Mode state lives inside the tool instance for better encapsulation)
+    
     // ========================================================================
     // TOOL CONFIGURATION
     // ========================================================================
@@ -108,6 +110,210 @@ class FloatingAccessibilityTools {
     link.rel = 'stylesheet';
     link.href = chrome.runtime.getURL('css/floating-ui.css');
     this.shadowRoot.appendChild(link);
+  }
+
+  // ========================================================================
+  // FORM MODE: DETECTION, PARSING, NAVIGATION
+  // ========================================================================
+  detectGoogleForm() {
+    try {
+      // Heuristics: presence of form root and question containers typical of Google Forms
+      const formEl = document.querySelector('form');
+      const hasApp = document.querySelector('[role="list"]') || document.querySelector('[class*="freebirdFormviewerComponentsQuestionBaseRoot"]');
+      this.isGoogleForm = !!(formEl && hasApp);
+      if (this.isGoogleForm && this.container) {
+        this.addSystemMessage('Google Form detected. Type "start form" to begin.', 'info');
+      }
+    } catch (e) {
+      console.warn('detectGoogleForm error:', e);
+      this.isGoogleForm = false;
+    }
+  }
+
+  startFormMode() {
+    if (!this.isGoogleForm) {
+      this.addSystemMessage('This page does not look like a Google Form.', 'error');
+      return;
+    }
+    this.formModeActive = true;
+    this.formCurrentIndex = 0;
+    this.formAnswers = {};
+    this.formQuestions = this.parseGoogleForm();
+    if (this.formQuestions.length === 0) {
+      this.addSystemMessage('No questions found on this form.', 'error');
+      this.formModeActive = false;
+      return;
+    }
+    this.addSystemMessage(`Form Mode started. ${this.formQuestions.length} questions found.`, 'success');
+    this.askCurrentQuestion();
+  }
+
+  parseGoogleForm() {
+    const questions = [];
+    try {
+      // Common Google Forms question roots
+      const nodes = document.querySelectorAll('[role="listitem"], .freebirdFormviewerComponentsQuestionBaseRoot');
+      nodes.forEach((node, idx) => {
+        // Label/title
+        const labelEl = node.querySelector('[role="heading"], .freebirdFormviewerComponentsQuestionBaseTitle');
+        const label = labelEl ? labelEl.textContent.trim() : `Question ${idx + 1}`;
+        
+        // Input types
+        const shortText = node.querySelector('input[type="text"], input[type="email"], input[type="number"], input[type="tel"], input[type="url"]');
+        const longText = node.querySelector('textarea');
+        const radios = node.querySelectorAll('div[role="radio"], input[type="radio"]');
+        const checkboxes = node.querySelectorAll('div[role="checkbox"], input[type="checkbox"]');
+        const selectEl = node.querySelector('div[role="listbox"], select');
+        
+        let type = 'text';
+        if (longText) type = 'long_text';
+        else if (radios && radios.length > 0) type = 'radio';
+        else if (checkboxes && checkboxes.length > 0) type = 'checkbox';
+        else if (selectEl) type = 'dropdown';
+        else if (shortText) type = 'text';
+        
+        // Options for radios/checkboxes/dropdown
+        const options = [];
+        node.querySelectorAll('[role="option"], [role="radio"], [role="checkbox"], option').forEach(opt => {
+          const text = (opt.getAttribute('aria-label') || opt.textContent || '').trim();
+          if (text) options.push(text);
+        });
+        
+        questions.push({ node, label, type, options });
+      });
+    } catch (e) {
+      console.warn('parseGoogleForm error:', e);
+    }
+    return questions;
+  }
+
+  askCurrentQuestion() {
+    if (!this.formModeActive) return;
+    const q = this.formQuestions[this.formCurrentIndex];
+    if (!q) { this.finishFormOrConfirm(); return; }
+    const preface = `Question ${this.formCurrentIndex + 1} of ${this.formQuestions.length}:`;
+    if (q.type === 'radio' || q.type === 'checkbox' || q.type === 'dropdown') {
+      const opts = q.options && q.options.length ? ` Options: ${q.options.join(', ')}` : '';
+      this.addChatMessage(`${preface} ${q.label}.${opts}`, 'agent');
+    } else {
+      this.addChatMessage(`${preface} ${q.label}`, 'agent');
+    }
+    this.awaitingFormAnswer = true;
+  }
+
+  handleFormAnswer(text) {
+    if (!this.formModeActive || !this.awaitingFormAnswer) return false;
+    const q = this.formQuestions[this.formCurrentIndex];
+    if (!q) return false;
+    const success = this.fillAnswerIntoDOM(q, text);
+    if (!success) {
+      this.addSystemMessage('Could not set that answer. Please try again or be more specific.', 'error');
+      return true;
+    }
+    this.formAnswers[this.formCurrentIndex] = text;
+    this.awaitingFormAnswer = false;
+    this.formCurrentIndex += 1;
+    if (this.formCurrentIndex < this.formQuestions.length) {
+      this.askCurrentQuestion();
+    } else {
+      this.finishFormOrConfirm();
+    }
+    return true;
+  }
+
+  fillAnswerIntoDOM(question, text) {
+    try {
+      const node = question.node;
+      switch (question.type) {
+        case 'text':
+        case 'long_text': {
+          const input = node.querySelector('input, textarea');
+          if (!input) return false;
+          input.focus();
+          input.value = text;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        case 'radio': {
+          const target = this.findOptionNode(node, text, '[role="radio"], input[type="radio"]');
+          if (!target) return false;
+          target.click();
+          target.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        case 'checkbox': {
+          // Support single or multiple comma-separated answers
+          const parts = text.split(',').map(s => s.trim()).filter(Boolean);
+          let any = false;
+          parts.forEach(p => {
+            const target = this.findOptionNode(node, p, '[role="checkbox"], input[type="checkbox"]');
+            if (target) {
+              target.click();
+              target.dispatchEvent(new Event('change', { bubbles: true }));
+              any = true;
+            }
+          });
+          return any;
+        }
+        case 'dropdown': {
+          // Try role=listbox or native select
+          const listbox = node.querySelector('[role="listbox"]');
+          if (listbox) {
+            listbox.click();
+            const opt = Array.from(document.querySelectorAll('[role="option"]')).find(o => (o.getAttribute('aria-label') || o.textContent || '').trim().toLowerCase() === text.toLowerCase());
+            if (opt) {
+              opt.click();
+              return true;
+            }
+            // Close the dropdown if not found
+            document.body.click();
+            return false;
+          }
+          const select = node.querySelector('select');
+          if (select) {
+            const optionEl = Array.from(select.options).find(o => o.text.trim().toLowerCase() === text.toLowerCase());
+            if (!optionEl) return false;
+            select.value = optionEl.value;
+            select.dispatchEvent(new Event('input', { bubbles: true }));
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+          return false;
+        }
+        default:
+          return false;
+      }
+    } catch (e) {
+      console.warn('fillAnswerIntoDOM error:', e);
+      return false;
+    }
+  }
+
+  findOptionNode(scope, labelText, selector) {
+    const labelLower = labelText.toLowerCase();
+    const candidates = scope.querySelectorAll(selector);
+    for (const c of candidates) {
+      const text = (c.getAttribute('aria-label') || c.textContent || '').trim().toLowerCase();
+      if (text === labelLower) return c;
+      // Try nearest label text
+      const parentText = (c.closest('[role]') || c.parentElement)?.textContent?.trim()?.toLowerCase() || '';
+      if (parentText.includes(labelLower)) return c;
+    }
+    return null;
+  }
+
+  finishFormOrConfirm() {
+    this.addChatMessage('All questions answered. Type "submit" to submit the form, or "review" to change an answer.', 'agent');
+  }
+
+  submitGoogleForm() {
+    try {
+      const btn = document.querySelector('div[role="button"][aria-label*="Submit"], div[role="button"]:has(span:contains("Submit")), input[type="submit"]');
+      if (btn) { btn.click(); this.addSystemMessage('Submitting form...', 'info'); return true; }
+    } catch (e) { console.warn('submitGoogleForm error:', e); }
+    this.addSystemMessage('Submit button not found.', 'error');
+    return false;
   }
 
   createMainButton() {
@@ -389,6 +595,14 @@ class FloatingAccessibilityTools {
           this.messageBuffer = "";
           this.container = null; // Store reference to the container
           this.processingButton = false; // Flag to prevent duplicate button processing
+
+          // Form Mode state
+          this.isGoogleForm = false;
+          this.formModeActive = false;
+          this.formQuestions = [];
+          this.formCurrentIndex = 0;
+          this.awaitingFormAnswer = false;
+          this.formAnswers = {};
         }
         
         getContent() {
@@ -439,6 +653,8 @@ class FloatingAccessibilityTools {
         setupEventListeners(container) {
           console.log('Setting up event listeners for container:', container);
           this.container = container; // Store container reference
+          // Detect Google Form after UI is ready
+          setTimeout(() => this.detectGoogleForm(), 300);
           
           const textInput = container.querySelector('#speech-text-input');
           const sendTextBtn = container.querySelector('#send-text-btn');
@@ -456,7 +672,7 @@ class FloatingAccessibilityTools {
           sendTextBtn.addEventListener('click', () => {
             const text = textInput.value.trim();
             if (text) {
-              this.sendTextCommand(text);
+              this.handleUserText(text);
               textInput.value = '';
             }
           });
@@ -465,7 +681,7 @@ class FloatingAccessibilityTools {
             if (e.key === 'Enter') {
               const text = textInput.value.trim();
               if (text) {
-                this.sendTextCommand(text);
+                this.handleUserText(text);
                 textInput.value = '';
               }
             }
@@ -492,7 +708,7 @@ class FloatingAccessibilityTools {
         }
         
         connectSSE() {
-          const sseUrl = `http://localhost:8000/events/${this.sessionId}?is_audio=${this.isAudioMode}`;
+          const sseUrl = `http://localhost:8000/events/${this.sessionId}`;
           console.log('Connecting to SSE:', sseUrl);
           this.eventSource = new EventSource(sseUrl);
           
@@ -554,16 +770,7 @@ class FloatingAccessibilityTools {
             return;
           }
           
-          if (message.interrupted) {
-            if (this.audioPlayerNode) {
-              this.audioPlayerNode.port.postMessage({ command: "endOfAudio" });
-            }
-            return;
-          }
-          
-          if (message.mime_type === "audio/pcm" && this.audioPlayerNode) {
-            this.audioPlayerNode.port.postMessage(this.base64ToArray(message.data));
-          }
+          if (message.interrupted) { return; }
           
           if (message.mime_type === "text/plain") {
             console.log('Processing text message:', message.data);
@@ -571,7 +778,7 @@ class FloatingAccessibilityTools {
             this.messageBuffer += message.data;
             console.log('Updated messageBuffer:', this.messageBuffer);
             
-            // Try to find and parse JSON button actions
+            // Try to find and parse JSON button actions (still supported outside Form Mode)
             const actionProcessed = this.tryParseJSONActions();
             console.log('Action processed:', actionProcessed);
             
@@ -1047,19 +1254,235 @@ class FloatingAccessibilityTools {
             this.addSystemMessage(`Error: ${error.message}`, 'error');
           }
         }
+
+        // Route user text either to Form Mode or normal agent
+        handleUserText(text) {
+          // Commands to control Form Mode
+          const lower = text.toLowerCase();
+          if (!this.formModeActive && (lower === 'start form' || lower === 'start')) {
+            this.addChatMessage(text, 'user');
+            this.startFormMode();
+            return;
+          }
+          if (this.formModeActive && (lower === 'submit' || lower === 'submit form')) {
+            this.addChatMessage(text, 'user');
+            this.submitGoogleForm();
+            return;
+          }
+          if (this.formModeActive && (lower.startsWith('go to question'))) {
+            const num = parseInt(lower.replace(/[^0-9]/g, ''), 10);
+            if (!isNaN(num) && num >= 1 && num <= this.formQuestions.length) {
+              this.formCurrentIndex = num - 1;
+              this.addChatMessage(text, 'user');
+              this.askCurrentQuestion();
+              return;
+            }
+          }
+
+          // If we're awaiting an answer in Form Mode, consume it
+          if (this.formModeActive && this.awaitingFormAnswer) {
+            this.addChatMessage(text, 'user');
+            this.handleFormAnswer(text);
+            return;
+          }
+
+          // Otherwise, fall back to normal agent flow
+          this.sendTextCommand(text);
+        }
+        
+        // ================================
+        // FORM MODE (tool-scoped)
+        // ================================
+        detectGoogleForm() {
+          try {
+            const formEl = document.querySelector('form');
+            const hasApp = document.querySelector('[role="list"]') || document.querySelector('[class*="freebirdFormviewerComponentsQuestionBaseRoot"]');
+            this.isGoogleForm = !!(formEl && hasApp);
+            if (this.isGoogleForm && this.container) {
+              this.addSystemMessage('Google Form detected. Type "start form" to begin.', 'info');
+            }
+          } catch (e) {
+            console.warn('detectGoogleForm error:', e);
+            this.isGoogleForm = false;
+          }
+        }
+
+        startFormMode() {
+          if (!this.isGoogleForm) {
+            this.addSystemMessage('This page does not look like a Google Form.', 'error');
+            return;
+          }
+          this.formModeActive = true;
+          this.formCurrentIndex = 0;
+          this.formAnswers = {};
+          this.formQuestions = this.parseGoogleForm();
+          if (this.formQuestions.length === 0) {
+            this.addSystemMessage('No questions found on this form.', 'error');
+            this.formModeActive = false;
+            return;
+          }
+          this.addSystemMessage(`Form Mode started. ${this.formQuestions.length} questions found.`, 'success');
+          this.askCurrentQuestion();
+        }
+
+        parseGoogleForm() {
+          const questions = [];
+          try {
+            const nodes = document.querySelectorAll('[role="listitem"], .freebirdFormviewerComponentsQuestionBaseRoot');
+            nodes.forEach((node, idx) => {
+              const labelEl = node.querySelector('[role="heading"], .freebirdFormviewerComponentsQuestionBaseTitle');
+              const label = labelEl ? labelEl.textContent.trim() : `Question ${idx + 1}`;
+              const shortText = node.querySelector('input[type="text"], input[type="email"], input[type="number"], input[type="tel"], input[type="url"]');
+              const longText = node.querySelector('textarea');
+              const radios = node.querySelectorAll('div[role="radio"], input[type="radio"]');
+              const checkboxes = node.querySelectorAll('div[role="checkbox"], input[type="checkbox"]');
+              const selectEl = node.querySelector('div[role="listbox"], select');
+              let type = 'text';
+              if (longText) type = 'long_text';
+              else if (radios && radios.length > 0) type = 'radio';
+              else if (checkboxes && checkboxes.length > 0) type = 'checkbox';
+              else if (selectEl) type = 'dropdown';
+              else if (shortText) type = 'text';
+              const options = [];
+              node.querySelectorAll('[role="option"], [role="radio"], [role="checkbox"], option').forEach(opt => {
+                const text = (opt.getAttribute('aria-label') || opt.textContent || '').trim();
+                if (text) options.push(text);
+              });
+              questions.push({ node, label, type, options });
+            });
+          } catch (e) {
+            console.warn('parseGoogleForm error:', e);
+          }
+          return questions;
+        }
+
+        askCurrentQuestion() {
+          if (!this.formModeActive) return;
+          const q = this.formQuestions[this.formCurrentIndex];
+          if (!q) { this.finishFormOrConfirm(); return; }
+          const preface = `Question ${this.formCurrentIndex + 1} of ${this.formQuestions.length}:`;
+          if (q.type === 'radio' || q.type === 'checkbox' || q.type === 'dropdown') {
+            const opts = q.options && q.options.length ? ` Options: ${q.options.join(', ')}` : '';
+            this.addChatMessage(`${preface} ${q.label}.${opts}`, 'agent');
+          } else {
+            this.addChatMessage(`${preface} ${q.label}`, 'agent');
+          }
+          this.awaitingFormAnswer = true;
+        }
+
+        handleFormAnswer(text) {
+          if (!this.formModeActive || !this.awaitingFormAnswer) return false;
+          const q = this.formQuestions[this.formCurrentIndex];
+          if (!q) return false;
+          const success = this.fillAnswerIntoDOM(q, text);
+          if (!success) {
+            this.addSystemMessage('Could not set that answer. Please try again or be more specific.', 'error');
+            return true;
+          }
+          this.formAnswers[this.formCurrentIndex] = text;
+          this.awaitingFormAnswer = false;
+          this.formCurrentIndex += 1;
+          if (this.formCurrentIndex < this.formQuestions.length) {
+            this.askCurrentQuestion();
+          } else {
+            this.finishFormOrConfirm();
+          }
+          return true;
+        }
+
+        fillAnswerIntoDOM(question, text) {
+          try {
+            const node = question.node;
+            switch (question.type) {
+              case 'text':
+              case 'long_text': {
+                const input = node.querySelector('input, textarea');
+                if (!input) return false;
+                input.focus();
+                input.value = text;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              }
+              case 'radio': {
+                const target = this.findOptionNode(node, text, '[role="radio"], input[type="radio"]');
+                if (!target) return false;
+                target.click();
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              }
+              case 'checkbox': {
+                const parts = text.split(',').map(s => s.trim()).filter(Boolean);
+                let any = false;
+                parts.forEach(p => {
+                  const target = this.findOptionNode(node, p, '[role="checkbox"], input[type="checkbox"]');
+                  if (target) { target.click(); target.dispatchEvent(new Event('change', { bubbles: true })); any = true; }
+                });
+                return any;
+              }
+              case 'dropdown': {
+                const listbox = node.querySelector('[role="listbox"]');
+                if (listbox) {
+                  listbox.click();
+                  const opt = Array.from(document.querySelectorAll('[role="option"]')).find(o => (o.getAttribute('aria-label') || o.textContent || '').trim().toLowerCase() === text.toLowerCase());
+                  if (opt) { opt.click(); return true; }
+                  document.body.click();
+                  return false;
+                }
+                const select = node.querySelector('select');
+                if (select) {
+                  const optionEl = Array.from(select.options).find(o => o.text.trim().toLowerCase() === text.toLowerCase());
+                  if (!optionEl) return false;
+                  select.value = optionEl.value;
+                  select.dispatchEvent(new Event('input', { bubbles: true }));
+                  select.dispatchEvent(new Event('change', { bubbles: true }));
+                  return true;
+                }
+                return false;
+              }
+              default:
+                return false;
+            }
+          } catch (e) {
+            console.warn('fillAnswerIntoDOM error:', e);
+            return false;
+          }
+        }
+
+        findOptionNode(scope, labelText, selector) {
+          const labelLower = labelText.toLowerCase();
+          const candidates = scope.querySelectorAll(selector);
+          for (const c of candidates) {
+            const text = (c.getAttribute('aria-label') || c.textContent || '').trim().toLowerCase();
+            if (text === labelLower) return c;
+            const parentText = (c.closest('[role]') || c.parentElement)?.textContent?.trim()?.toLowerCase() || '';
+            if (parentText.includes(labelLower)) return c;
+          }
+          return null;
+        }
+
+        finishFormOrConfirm() {
+          this.addChatMessage('All questions answered. Type "submit" to submit the form, or "review" to change an answer.', 'agent');
+        }
+
+        submitGoogleForm() {
+          try {
+            const candidates = Array.from(document.querySelectorAll('div[role="button"], span[role="button"], button, input[type="submit"]'));
+            const btn = candidates.find(el => {
+              const t = (el.innerText || el.textContent || '').trim().toLowerCase();
+              const a = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+              return t.includes('submit') || a.includes('submit');
+            }) || candidates.find(el => (el.getAttribute('data-tooltip') || '').toLowerCase().includes('submit'));
+            if (btn) { btn.click(); this.addSystemMessage('Submitting form...', 'info'); return true; }
+          } catch (e) { console.warn('submitGoogleForm error:', e); }
+          this.addSystemMessage('Submit button not found.', 'error');
+          return false;
+        }
         
         async startAudioRecording() {
           try {
-            // Import audio worklets
-            const { startAudioPlayerWorklet } = await import(chrome.runtime.getURL('js/audio/audio-player.js'));
+            // Import only recorder worklet; disable audio player for robustness
             const { startAudioRecorderWorklet } = await import(chrome.runtime.getURL('js/audio/audio-recorder.js'));
-            
-            // Start audio player
-            const [playerNode, playerCtx] = await startAudioPlayerWorklet();
-            this.audioPlayerNode = playerNode;
-            this.audioPlayerContext = playerCtx;
-            
-            // Start audio recorder
             const [recorderNode, recorderCtx, stream] = await startAudioRecorderWorklet((pcmData) => {
               this.audioRecorderHandler(pcmData);
             });
@@ -1089,9 +1512,7 @@ class FloatingAccessibilityTools {
             this.sendBufferedAudio();
           }
           
-          if (this.micStream) {
-            this.micStream.getTracks().forEach(track => track.stop());
-          }
+          if (this.micStream) { this.micStream.getTracks().forEach(track => track.stop()); }
           
         // Update UI
         const startBtn = this.container ? this.container.querySelector('#start-audio-btn') : document.querySelector('#start-audio-btn');

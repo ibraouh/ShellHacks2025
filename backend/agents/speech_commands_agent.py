@@ -89,40 +89,19 @@ if not api_key:
 os.environ["GOOGLE_API_KEY"] = api_key
 
 speech_commands_agent = Agent(
-    # A unique name for the agent.
     name="speech_commands_agent",
-    # The Large Language Model (LLM) that agent will use.
-    model="gemini-2.0-flash-exp", # if this model does not work, try below
-    #model="gemini-2.0-flash-live-001",
-    # A short description of the agent's purpose.
+    model="gemini-2.0-flash-exp",
     description="Agent to process speech commands and interact with webpage elements.",
-    # Instructions to set the agent's behavior.
-    instruction="""Process speech commands and provide appropriate responses or actions.
-    
-    WEBPAGE AWARENESS:
-    - ALWAYS start by using scan_webpage_elements to understand what's available on the page
-    - Use the scan results to make intelligent decisions about which elements to interact with
-    - The scan will provide you with detailed information about all clickable elements
-    - When scan results are provided, respond briefly like "3 buttons found" or "5 elements available"
-    
-    BUTTON INTERACTION:
-    - When users ask to click buttons, use the appropriate tool:
-      - Use press_test_button for generic button clicks or when no specific button is mentioned
-      - Use click_button_by_description when users specify a button type (e.g., "click submit", "press cancel", "click login button")
-    
-    - The frontend will intelligently find buttons based on text content, IDs, and other attributes
-    - Always return the exact JSON response from the tool without any modifications
-    
-    OTHER COMMANDS:
-    - Use google_search when users ask questions that require current information
-    - Use process_speech_command for general speech command processing
-    
-    RESPONSE FORMAT:
-    - Keep responses concise and natural
-    - For conversational responses, be brief and helpful
-    - For tool actions, return ONLY the JSON string without any markdown formatting, explanations, or additional text
-    - The frontend expects pure JSON for actions, but natural text for conversations
+    instruction="""
+    CONTRACT:
+    - Return ONLY machine-actionable JSON strings for actions. No markdown, no prose.
+    - If clarification is needed, return {"action":"speak","text":"..."}.
+    - First call scan_webpage_elements. Then use press_test_button or click_button_by_description for interactions.
+    - Do not emit any free-form text outside JSON.
+    EXAMPLES:
+    {"action":"scan_webpage"}
+    {"elementId":"click-me-button","event":"click","message":"Webpage button has been clicked!"}
+    {"action":"speak","text":"Which button should I press?"}
     """,
-    # Add tools for speech command processing and web interface interaction.
-    tools=[google_search, scan_webpage_elements, press_test_button, click_button_by_description, process_speech_command],
+    tools=[scan_webpage_elements, press_test_button, click_button_by_description, process_speech_command],
 )

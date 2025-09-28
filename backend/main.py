@@ -84,7 +84,7 @@ async def shutdown_event():
 # SSE ENDPOINTS FOR REAL-TIME SPEECH COMMANDS
 # =============================================================================
 
-async def start_agent_session(user_id, is_audio=False):
+async def start_agent_session(user_id):
     """Starts an agent session"""
     # Create a Runner
     runner = InMemoryRunner(
@@ -98,13 +98,10 @@ async def start_agent_session(user_id, is_audio=False):
         user_id=user_id,
     )
 
-    # Set response modality
-    modality = types.Modality.AUDIO if is_audio else types.Modality.TEXT
+    # Force text-only modality for robustness
     run_config = RunConfig(
-        response_modalities=[modality],
+        response_modalities=[types.Modality.TEXT],
         session_resumption=types.SessionResumptionConfig(),
-        output_audio_transcription=types.AudioTranscriptionConfig(),
-        input_audio_transcription=types.AudioTranscriptionConfig(),
     )
 
     # Create a LiveRequestQueue for this session
@@ -169,20 +166,7 @@ async def agent_to_client_sse(live_events):
         if not part:
             continue
 
-        # If it's audio, send Base64 encoded audio data
-        is_audio = part.inline_data and part.inline_data.mime_type.startswith("audio/pcm")
-        if is_audio:
-            audio_data = part.inline_data and part.inline_data.data
-            if audio_data:
-                message = {
-                    "mime_type": "audio/pcm",
-                    "data": base64.b64encode(audio_data).decode("ascii")
-                }
-                yield f"data: {json.dumps(message)}\n\n"
-                print(f"[AGENT TO CLIENT]: audio/pcm: {len(audio_data)} bytes.")
-                continue
-
-        # If it's text, send it only when complete (not partial)
+    # If it's text, send it only when complete (not partial)
         if part.text and not event.partial:
             message = {
                 "mime_type": "text/plain",
@@ -192,16 +176,16 @@ async def agent_to_client_sse(live_events):
             print(f"[AGENT TO CLIENT]: text/plain: {message}")
 
 @app.get("/events/{user_id}")
-async def sse_endpoint(user_id: int, is_audio: str = "false"):
+async def sse_endpoint(user_id: int):
     """SSE endpoint for agent to client communication"""
     # Start agent session
     user_id_str = str(user_id)
-    live_events, live_request_queue = await start_agent_session(user_id_str, is_audio == "true")
+    live_events, live_request_queue = await start_agent_session(user_id_str)
 
     # Store the request queue for this user
     active_sessions[user_id_str] = live_request_queue
 
-    print(f"Client #{user_id} connected via SSE, audio mode: {is_audio}")
+    print(f"Client #{user_id} connected via SSE")
 
     def cleanup():
         live_request_queue.close()
