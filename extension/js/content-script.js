@@ -596,6 +596,12 @@ class FloatingAccessibilityTools {
           this.container = null; // Store reference to the container
           this.processingButton = false; // Flag to prevent duplicate button processing
 
+          // (TTS removed)
+
+          // Simple STT state (Web Speech API)
+          this.recognition = null;
+          this.isRecognizing = false;
+
           // Form Mode state
           this.isGoogleForm = false;
           this.formModeActive = false;
@@ -625,10 +631,8 @@ class FloatingAccessibilityTools {
                 <div id="text-mode">
                   <div style="display: flex; gap: 8px; margin-bottom: 2px;">
                     <input type="text" id="speech-text-input" placeholder="Type your message..." 
-                           style="flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 20px; font-size: 14px; height: 40px; outline: none; transition: border-color 0.2s;"
-                           onfocus="this.style.borderColor='#667eea'" onblur="this.style.borderColor='#ddd'">
-                    <button class="button" id="send-text-btn" style="padding: 8px 0px; border-radius: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; color: white; font-size: 16px; cursor: pointer; transition: transform 0.2s; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; margin: 0px;" 
-                            onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">↵</button>
+                           style="flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 20px; font-size: 14px; height: 40px; outline: none; transition: border-color 0.2s;">
+                    <button class="button" id="send-text-btn" style="padding: 8px 0px; border-radius: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; color: white; font-size: 16px; cursor: pointer; transition: transform 0.2s; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; margin: 0px;">↵</button>
                   </div>
                 </div>
                 
@@ -642,8 +646,7 @@ class FloatingAccessibilityTools {
                 
                 <!-- Mode Toggle -->
                 <div style="text-align: center;">
-                  <button class="button" id="toggle-mode-btn" style="padding: 6px 14px; border-radius: 20px; background: #f4f6fb; border: 1px solid #ddd; color: #666; font-size: 12px; cursor: pointer; transition: all 0.2s;"
-                          onmouseover="this.style.backgroundColor='#e9ecef'" onmouseout="this.style.backgroundColor='#f4f6fb'">Switch to Audio Mode</button>
+                  <button class="button" id="toggle-mode-btn" style="padding: 6px 14px; border-radius: 20px; background: #f4f6fb; border: 1px solid #ddd; color: #666; font-size: 12px; cursor: pointer; transition: all 0.2s;">Switch to Audio Mode</button>
                 </div>
               </div>
             </div>
@@ -689,11 +692,11 @@ class FloatingAccessibilityTools {
           
           // Audio mode
           startAudioBtn.addEventListener('click', () => {
-            this.startAudioRecording();
+            this.startDictation();
           });
           
           stopAudioBtn.addEventListener('click', () => {
-            this.stopAudioRecording();
+            this.stopDictation();
           });
           
           // Mode toggle
@@ -764,7 +767,6 @@ class FloatingAccessibilityTools {
           console.log('Handling SSE message:', message);
           
           if (message.turn_complete) {
-            console.log('Turn complete, clearing message buffer');
             this.currentMessageId = null;
             this.messageBuffer = "";
             return;
@@ -788,9 +790,9 @@ class FloatingAccessibilityTools {
               return;
             }
             
-            // Check if this is a direct JSON action (not in buffer)
+            // Check if this is a direct JSON action (not in buffer) - only if no action was processed above
             const text = message.data.trim();
-            if (this.isDirectJSONAction(text)) {
+            if (!actionProcessed && this.isDirectJSONAction(text)) {
               console.log('Detected direct JSON action:', text);
               return;
             }
@@ -803,13 +805,13 @@ class FloatingAccessibilityTools {
             
           // Add text to results (this is a chat message)
           if (this.currentMessageId === null) {
-            this.currentMessageId = Math.random().toString(36).substring(7);
+            this.currentMessageId = 'msg-' + Math.random().toString(36).substring(7);
             console.log('Creating new message element with ID:', this.currentMessageId);
             this.addChatMessage('', 'agent', this.currentMessageId);
           }
             
             // Find the message element within the container
-            const messageElement = this.container ? this.container.querySelector(`#${this.currentMessageId}`) : document.getElementById(this.currentMessageId);
+          const messageElement = document.getElementById(this.currentMessageId);
             if (messageElement) {
               console.log('Updating message element with:', message.data);
               // Find the text div within the message bubble
@@ -827,31 +829,36 @@ class FloatingAccessibilityTools {
             }
           }
         }
+
+        // Server audio handler removed; relying on browser TTS fallback for now
         
         isDirectJSONAction(text) {
           // Check if the text is a direct JSON action (not buffered)
           try {
-            const data = JSON.parse(text);
+            // Extract JSON if wrapped in code fences
+            let textToParse = text;
+            const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+            if (fenced && fenced[1]) {
+              textToParse = fenced[1].trim();
+            }
+            const data = JSON.parse(textToParse);
             
             // Check if this is a nested result with button action
-            if (data.result && typeof data.result === 'string' && !this.processingButton) {
+            if (data.result && !this.processingButton) {
               console.log('Found direct nested result, processingButton:', this.processingButton);
-              console.log('Result string:', data.result);
-              try {
-                const innerData = JSON.parse(data.result);
-                console.log('Parsed inner data:', innerData);
-                if (innerData.elementId && innerData.event === "click") {
-                  console.log('Processing direct nested button action:', innerData);
+              const innerCandidate = typeof data.result === 'string' ? (() => { try { return JSON.parse(data.result); } catch (_) { return null; } })() : data.result;
+              if (innerCandidate && typeof innerCandidate === 'object') {
+                console.log('Parsed inner data:', innerCandidate);
+                if (innerCandidate.elementId && innerCandidate.event === "click") {
+                  console.log('Processing direct nested button action:', innerCandidate);
                   this.processingButton = true;
-                  this.handleButtonAction(innerData);
+                  this.handleButtonAction(innerCandidate);
                   // Reset flag after a short delay
                   setTimeout(() => {
                     this.processingButton = false;
                   }, 1000);
                   return true; // Action was processed
                 }
-              } catch (innerE) {
-                console.log('Inner JSON parse failed:', innerE);
               }
             }
             
@@ -876,12 +883,31 @@ class FloatingAccessibilityTools {
               return true; // Action was processed
             }
             
+            // Handle speak action
+            if (data.action === "speak" && typeof data.text === 'string') {
+              this.addChatMessage(data.text, 'agent');
+              return true;
+            }
+            
+            // Handle click by description action
+            if (data.action === "click_button_by_description" && data.description && !this.processingButton) {
+              const slug = String(data.description).toLowerCase().trim().replace(/\s+/g, '-');
+              const payload = { elementId: `button-${slug}`, description: data.description, event: 'click' };
+              this.processingButton = true;
+              this.handleButtonAction(payload);
+              setTimeout(() => { this.processingButton = false; }, 1000);
+              return true;
+            }
+            
           } catch (e) {
             console.log('Not a JSON action:', e);
           }
           
           return false; // Not a JSON action
         }
+
+        // (TTS summary removed)
+        speakActionSummaryIfAny(json) { return; }
         
         isSystemActionMessage(text) {
           // System action messages are typically short, informational messages
@@ -913,6 +939,40 @@ class FloatingAccessibilityTools {
           let braceCount = 0;
           let startIndex = -1;
           
+          // First, handle code-fenced JSON blocks
+          const fenceMatch = this.messageBuffer.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+          if (fenceMatch && fenceMatch[1]) {
+            const fencedJson = fenceMatch[1].trim();
+            try {
+              const data = JSON.parse(fencedJson);
+              // Attempt to handle known actions
+              if (data.action === "scan_webpage") {
+                const scanResult = this.scanWebpageElements();
+                this.addSystemMessage(`${scanResult.elements.length} elements found`, 'info');
+                this.sendScanResults(scanResult);
+                // Remove the fenced block from buffer
+                this.messageBuffer = this.messageBuffer.replace(fenceMatch[0], '');
+                return true;
+              }
+              if (data.action === "speak" && typeof data.text === 'string') {
+                this.addChatMessage(data.text, 'agent');
+                this.messageBuffer = this.messageBuffer.replace(fenceMatch[0], '');
+                return true;
+              }
+              if (data.action === "click_button_by_description" && data.description && !this.processingButton) {
+                const slug = String(data.description).toLowerCase().trim().replace(/\s+/g, '-');
+                const payload = { elementId: `button-${slug}`, description: data.description, event: 'click' };
+                this.processingButton = true;
+                this.handleButtonAction(payload);
+                this.messageBuffer = this.messageBuffer.replace(fenceMatch[0], '');
+                setTimeout(() => { this.processingButton = false; }, 1000);
+                return true;
+              }
+            } catch (e) {
+              // Ignore parse, fallback to brace scanning
+            }
+          }
+
           for (let i = 0; i < this.messageBuffer.length; i++) {
             if (this.messageBuffer[i] === '{') {
               if (startIndex === -1) startIndex = i;
@@ -929,6 +989,7 @@ class FloatingAccessibilityTools {
                   console.log('Parsed JSON data:', data);
                   console.log('Has result field:', !!data.result);
                   console.log('Result type:', typeof data.result);
+                  this.speakActionSummaryIfAny(data);
                   
                   // Check if this is a webpage scan request
                   if (data.action === "scan_webpage") {
@@ -942,6 +1003,24 @@ class FloatingAccessibilityTools {
                     // Remove the processed JSON from buffer
                     this.messageBuffer = this.messageBuffer.substring(i + 1);
                     return true; // Action was processed
+                  }
+                  
+                  // Handle speak action
+                  if (data.action === "speak" && typeof data.text === 'string') {
+                    this.addChatMessage(data.text, 'agent');
+                    this.messageBuffer = this.messageBuffer.substring(i + 1);
+                    return true;
+                  }
+                  
+                  // Handle click by description action
+                  if (data.action === "click_button_by_description" && data.description && !this.processingButton) {
+                    const slug = String(data.description).toLowerCase().trim().replace(/\s+/g, '-');
+                    const payload = { elementId: `button-${slug}`, description: data.description, event: 'click' };
+                    this.processingButton = true;
+                    this.handleButtonAction(payload);
+                    this.messageBuffer = this.messageBuffer.substring(i + 1);
+                    setTimeout(() => { this.processingButton = false; }, 1000);
+                    return true;
                   }
                   
                   // Check if this is a button action directly
@@ -959,16 +1038,15 @@ class FloatingAccessibilityTools {
                   }
                   
                   // Check if this is a nested result with button action
-                  if (data.result && typeof data.result === 'string' && !this.processingButton) {
+                  if (data.result && !this.processingButton) {
                     console.log('Found nested result, processingButton:', this.processingButton);
-                    console.log('Result string:', data.result);
-                    try {
-                      const innerData = JSON.parse(data.result);
-                      console.log('Parsed inner data:', innerData);
-                      if (innerData.elementId && innerData.event === "click") {
-                        console.log('Processing nested button action:', innerData);
+                    const innerCandidate = typeof data.result === 'string' ? (() => { try { return JSON.parse(data.result); } catch (_) { return null; } })() : data.result;
+                    if (innerCandidate && typeof innerCandidate === 'object') {
+                      console.log('Parsed inner data:', innerCandidate);
+                      if (innerCandidate.elementId && innerCandidate.event === "click") {
+                        console.log('Processing nested button action:', innerCandidate);
                         this.processingButton = true;
-                        this.handleButtonAction(innerData);
+                        this.handleButtonAction(innerCandidate);
                         // Remove the processed JSON from buffer and return to prevent duplicate processing
                         this.messageBuffer = this.messageBuffer.substring(i + 1);
                         // Reset flag after a short delay
@@ -977,8 +1055,6 @@ class FloatingAccessibilityTools {
                         }, 1000);
                         return true; // Action was processed
                       }
-                    } catch (innerE) {
-                      console.log('Inner JSON parse failed:', innerE);
                     }
                   }
                 } catch (e) {
@@ -1130,7 +1206,9 @@ class FloatingAccessibilityTools {
           
           // If not found by ID, try to find by text content or other attributes
           if (!element) {
-            const buttons = document.querySelectorAll('button');
+            const buttons = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'))
+              // Filter out extension's own UI
+              .filter(b => !b.closest('#floating-accessibility-tools'));
             console.log(`Found ${buttons.length} buttons on page:`, Array.from(buttons).map(b => ({
               id: b.id,
               text: b.textContent.trim(),
@@ -1139,19 +1217,26 @@ class FloatingAccessibilityTools {
             // Extract description from elementId if it follows the pattern "button-description"
             let targetDescription = '';
             if (data.elementId && data.elementId.startsWith('button-')) {
-              targetDescription = data.elementId.replace('button-', '').replace('-', ' ').toLowerCase();
+              targetDescription = data.elementId.replace('button-', '').replace(/-/g, ' ').toLowerCase();
+            }
+            // Or fallback to explicit description provided by agent
+            if (!targetDescription && data.description) {
+              targetDescription = String(data.description).toLowerCase().trim();
             }
             console.log('Target description from elementId:', targetDescription);
             
             // Look for buttons with specific text patterns
             for (const button of buttons) {
-              const text = button.textContent.toLowerCase().trim();
-              const id = button.id.toLowerCase();
+              const text = (button.textContent || button.value || '').toLowerCase().trim();
+              const id = (button.id || '').toLowerCase();
+              
+              console.log(`Checking button: text="${text}", id="${id}", target="${targetDescription}"`);
               
               // If we have a target description, try to match it FIRST (highest priority)
               if (targetDescription && (text.includes(targetDescription) || id.includes(targetDescription))) {
                 element = button;
-                buttonDescription = `Matched "${targetDescription}": "${button.textContent.trim()}"`;
+                buttonDescription = `Matched "${targetDescription}": "${(button.textContent || button.value || '').trim()}"`;
+                console.log('Found match by description:', buttonDescription);
                 break;
               }
             }
@@ -1159,8 +1244,8 @@ class FloatingAccessibilityTools {
             // If no specific match found, look for generic patterns
             if (!element) {
               for (const button of buttons) {
-                const text = button.textContent.toLowerCase().trim();
-                const id = button.id.toLowerCase();
+                const text = (button.textContent || button.value || '').toLowerCase().trim();
+                const id = (button.id || '').toLowerCase();
                 
                 // Check for common button patterns (lower priority)
                 if (text.includes('click me') || 
@@ -1186,7 +1271,7 @@ class FloatingAccessibilityTools {
                     id.includes('success') ||
                     button.onclick) {
                   element = button;
-                  buttonDescription = `Text: "${button.textContent.trim()}"`;
+                  buttonDescription = `Text: "${(button.textContent || button.value || '').trim()}"`;
                   break;
                 }
               }
@@ -1207,20 +1292,44 @@ class FloatingAccessibilityTools {
           
         if (element) {
           console.log('Clicking webpage button');
-          element.click();
+          console.log('Button element:', element);
+          console.log('Button onclick:', element.onclick);
+          console.log('Button text:', element.textContent);
+          
+          try {
+            // Try direct click() method first - this should be sufficient for most cases
+            element.click();
+            console.log('Button clicked successfully');
+          } catch (error) {
+            console.error('Error clicking button:', error);
+            // Fallback: try calling onclick handler directly if it exists
+            if (element.onclick) {
+              console.log('Calling onclick handler as fallback');
+              element.onclick.call(element);
+            } else {
+              // Last resort: synthesize mouse events
+              const events = ['pointerdown', 'mousedown', 'mouseup', 'click'];
+              for (const type of events) {
+                const evt = new MouseEvent(type, { bubbles: true, cancelable: true, view: window });
+                element.dispatchEvent(evt);
+              }
+              console.log('Mouse events dispatched as last resort');
+            }
+          }
           
           // Extract a clean button name for the user message
           let buttonName = '';
-          if (element.textContent && element.textContent.trim()) {
-            buttonName = element.textContent.trim();
+          const labelText = (element.textContent || element.value || '').trim();
+          if (labelText) {
+            buttonName = labelText;
           } else if (data.elementId && data.elementId.startsWith('button-')) {
-            buttonName = data.elementId.replace('button-', '').replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase());
+            buttonName = data.elementId.replace('button-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
           } else {
             buttonName = 'button';
           }
           
           // Add a user-friendly chat message instead of system message
-          this.addChatMessage(`I clicked the "${buttonName}" button.`, 'agent');
+          this.addChatMessage(`I clicked the \"${buttonName}\" button.`, 'agent');
         } else {
           console.error('No button found on webpage');
           this.addSystemMessage(`No button found on webpage`, 'error');
@@ -1254,7 +1363,7 @@ class FloatingAccessibilityTools {
             this.addSystemMessage(`Error: ${error.message}`, 'error');
           }
         }
-
+        
         // Route user text either to Form Mode or normal agent
         handleUserText(text) {
           // Commands to control Form Mode
@@ -1264,7 +1373,7 @@ class FloatingAccessibilityTools {
             this.startFormMode();
             return;
           }
-          if (this.formModeActive && (lower === 'submit' || lower === 'submit form')) {
+          if (this.formModeActive && (lower === 'submit' || lower === 'submit form' || lower.includes('submit'))) {
             this.addChatMessage(text, 'user');
             this.submitGoogleForm();
             return;
@@ -1328,31 +1437,56 @@ class FloatingAccessibilityTools {
         parseGoogleForm() {
           const questions = [];
           try {
-            const nodes = document.querySelectorAll('[role="listitem"], .freebirdFormviewerComponentsQuestionBaseRoot');
+            // Prefer Google Forms question root nodes when available
+            let nodes = Array.from(document.querySelectorAll('.freebirdFormviewerComponentsQuestionBaseRoot'));
+            if (!nodes.length) {
+              // Fallback: broader heuristic, but will filter non-question items below
+              nodes = Array.from(document.querySelectorAll('[role="listitem"]'));
+            }
+
             nodes.forEach((node, idx) => {
               const labelEl = node.querySelector('[role="heading"], .freebirdFormviewerComponentsQuestionBaseTitle');
               const label = labelEl ? labelEl.textContent.trim() : `Question ${idx + 1}`;
+
               const shortText = node.querySelector('input[type="text"], input[type="email"], input[type="number"], input[type="tel"], input[type="url"]');
               const longText = node.querySelector('textarea');
               const radios = node.querySelectorAll('div[role="radio"], input[type="radio"]');
               const checkboxes = node.querySelectorAll('div[role="checkbox"], input[type="checkbox"]');
               const selectEl = node.querySelector('div[role="listbox"], select');
+
+              // Filter out non-question items (no interactive inputs/options)
+              const hasInteractive = !!(shortText || longText || (radios && radios.length) || (checkboxes && checkboxes.length) || selectEl);
+              if (!hasInteractive) return; // skip non-question
+
               let type = 'text';
               if (longText) type = 'long_text';
               else if (radios && radios.length > 0) type = 'radio';
               else if (checkboxes && checkboxes.length > 0) type = 'checkbox';
               else if (selectEl) type = 'dropdown';
               else if (shortText) type = 'text';
+
               const options = [];
-              node.querySelectorAll('[role="option"], [role="radio"], [role="checkbox"], option').forEach(opt => {
+              // Only consider options contained within this node to avoid cross-question bleed
+              const scopedOptions = node.querySelectorAll('[role="option"], [role="radio"], [role="checkbox"], option');
+              scopedOptions.forEach(opt => {
                 const text = (opt.getAttribute('aria-label') || opt.textContent || '').trim();
                 if (text) options.push(text);
               });
+
+              // Filter out likely non-question artifacts:
+              // - no visible title AND only one option for a choice type
+              // - title is a generic placeholder like "Question N" AND only one option
+              const isPlaceholderTitle = /^Question\s+\d+$/i.test(label);
+              if ((type === 'checkbox' || type === 'radio') && options.length <= 1 && (!labelEl || isPlaceholderTitle)) {
+                return;
+              }
+
               questions.push({ node, label, type, options });
             });
           } catch (e) {
             console.warn('parseGoogleForm error:', e);
           }
+          try { console.info('FormMode parsed questions:', questions.map(q => ({ label: q.label, type: q.type, optionsCount: (q.options||[]).length }))); } catch (_) {}
           return questions;
         }
 
@@ -1370,16 +1504,135 @@ class FloatingAccessibilityTools {
           this.awaitingFormAnswer = true;
         }
 
-        handleFormAnswer(text) {
+        async handleFormAnswer(text) {
           if (!this.formModeActive || !this.awaitingFormAnswer) return false;
           const q = this.formQuestions[this.formCurrentIndex];
           if (!q) return false;
-          const success = this.fillAnswerIntoDOM(q, text);
+          // Try ADK interpretation first
+          let interpreted = null;
+          try {
+            const resp = await this.fetchWithRetry(`http://localhost:8000/form/interpret`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                question: q.label,
+                type: q.type,
+                options: q.options || [],
+                user_text: text,
+                context: { index: this.formCurrentIndex, total: this.formQuestions.length }
+              })
+            });
+            const data = await resp.json();
+            if (data && data.success) interpreted = data.data;
+          } catch (e) {
+            console.warn('interpret error, falling back:', e);
+          }
+
+          let success = false;
+          let usedValue = null;
+          const conf = interpreted && typeof interpreted.confidence === 'number' ? interpreted.confidence : 0;
+          if (interpreted && interpreted.action) {
+            if ((q.type === 'text' || q.type === 'long_text') && interpreted.action === 'set_text') {
+              const value = interpreted.normalized_text || text;
+              success = this.fillAnswerIntoDOM(q, value);
+              usedValue = value;
+            } else if ((q.type === 'radio' || q.type === 'dropdown') && interpreted.action === 'select') {
+              const rawChoice = (interpreted.choices && interpreted.choices[0]) || text;
+              const mapped = this.mapChoiceToOption(rawChoice, q.options || []);
+              const choice = mapped || rawChoice;
+              success = this.fillAnswerIntoDOM(q, choice);
+              usedValue = choice;
+            } else if (q.type === 'checkbox' && interpreted.action === 'multi_select') {
+              const rawChoices = (interpreted.choices && interpreted.choices.length) ? interpreted.choices : [text];
+              const mappedList = this.mapChoicesToOptions(rawChoices, q.options || []);
+              const choices = mappedList.length ? mappedList.join(', ') : rawChoices.join(', ');
+              success = this.fillAnswerIntoDOM(q, choices);
+              usedValue = choices;
+            }
+            if ((!success || conf < 0.8) && interpreted.action === 'clarify' && interpreted.prompt) {
+              this.addChatMessage(interpreted.prompt, 'agent');
+              this.awaitingFormAnswer = true;
+              return true;
+            }
+            // If ADK returned a mismatched action for non-text types, try best-effort mapping before prompting
+            if (!success && (q.type === 'radio' || q.type === 'dropdown')) {
+              const fallbackMapped = this.mapChoiceToOption(text, q.options || []);
+              if (fallbackMapped) {
+                success = this.fillAnswerIntoDOM(q, fallbackMapped);
+                usedValue = fallbackMapped;
+              }
+            } else if (!success && q.type === 'checkbox') {
+              const parts = text.split(/[;,]|\band\b|\bor\b/i).map(s => s.trim()).filter(Boolean);
+              const fallbackList = this.mapChoicesToOptions(parts.length ? parts : [text], q.options || []);
+              if (fallbackList.length) {
+                const choices = fallbackList.join(', ');
+                success = this.fillAnswerIntoDOM(q, choices);
+                usedValue = choices;
+              }
+            }
+            if (!success && (q.type === 'radio' || q.type === 'dropdown' || q.type === 'checkbox')) {
+              const optsPreview = (q.options || []).slice(0, 6).join(', ');
+              this.addChatMessage(`Please choose one of: ${optsPreview}${q.options.length > 6 ? ', ...' : ''}`, 'agent');
+              this.awaitingFormAnswer = true;
+              return true;
+            }
+          } else {
+            // Fallback: direct
+            if (q.type === 'text' || q.type === 'long_text') {
+              let fallbackValue = text;
+              const labelLower = (q.label || '').toLowerCase();
+              if (labelLower.includes('name')) {
+                const m = text.match(/(?:^|\b)(?:i am|i'm|my name is|my name's|it is|it's)\s+([a-z][a-z\-\' ]{1,60})/i);
+                if (m && m[1]) {
+                  let candidate = m[1].trim();
+                  candidate = candidate.split(/[,.!?]/)[0].trim();
+                  candidate = candidate.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+                  fallbackValue = candidate;
+                  try { console.info('FormMode fallback name extraction:', candidate); } catch (_) {}
+                } else {
+                  try { console.info('FormMode: no name pattern matched; using raw text'); } catch (_) {}
+                }
+              } else {
+                try { console.info('FormMode: ADK unavailable; using raw text'); } catch (_) {}
+              }
+              success = this.fillAnswerIntoDOM(q, fallbackValue);
+              usedValue = fallbackValue;
+            } else if (q.type === 'radio' || q.type === 'dropdown') {
+              const mapped = this.mapChoiceToOption(text, q.options || []);
+              if (mapped) {
+                success = this.fillAnswerIntoDOM(q, mapped);
+                usedValue = mapped;
+              } else {
+                // As a last try, attempt direct fill with raw text
+                success = this.fillAnswerIntoDOM(q, text);
+                usedValue = text;
+                if (!success) {
+                  const optsPreview = (q.options || []).slice(0, 6).join(', ');
+                  this.addChatMessage(`Please choose one of: ${optsPreview}${q.options && q.options.length > 6 ? ', ...' : ''}`, 'agent');
+                  this.awaitingFormAnswer = true;
+                  return true;
+                }
+              }
+            } else if (q.type === 'checkbox') {
+              const parts = text.split(/[;,]|\band\b|\bor\b/i).map(s => s.trim()).filter(Boolean);
+              const mappedList = this.mapChoicesToOptions(parts.length ? parts : [text], q.options || []);
+              if (mappedList.length) {
+                const choices = mappedList.join(', ');
+                success = this.fillAnswerIntoDOM(q, choices);
+                usedValue = choices;
+              } else {
+                const optsPreview = (q.options || []).slice(0, 6).join(', ');
+                this.addChatMessage(`Please choose one of: ${optsPreview}${q.options && q.options.length > 6 ? ', ...' : ''}`, 'agent');
+                this.awaitingFormAnswer = true;
+                return true;
+              }
+            }
+          }
           if (!success) {
             this.addSystemMessage('Could not set that answer. Please try again or be more specific.', 'error');
             return true;
           }
-          this.formAnswers[this.formCurrentIndex] = text;
+          this.formAnswers[this.formCurrentIndex] = usedValue !== null ? usedValue : text;
           this.awaitingFormAnswer = false;
           this.formCurrentIndex += 1;
           if (this.formCurrentIndex < this.formQuestions.length) {
@@ -1388,6 +1641,55 @@ class FloatingAccessibilityTools {
             this.finishFormOrConfirm();
           }
           return true;
+        }
+
+        normalizeLabel(label) {
+          if (!label) return '';
+          return label.toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+
+        mapChoiceToOption(answer, options) {
+          if (!answer) return null;
+          const normAns = this.normalizeLabel(answer);
+          if (!options || !options.length) return null;
+
+          // 1) Exact normalized equality
+          for (const opt of options) {
+            if (this.normalizeLabel(opt) === normAns) return opt;
+          }
+          // 2) Substring match
+          for (const opt of options) {
+            if (this.normalizeLabel(opt).includes(normAns) && normAns.length >= 2) return opt;
+          }
+          // 3) Single-letter ordinal mapping (A, B, C...)
+          if (/^[a-z]$/.test(answer.trim().toLowerCase())) {
+            const letter = answer.trim().toLowerCase();
+            const idx = letter.charCodeAt(0) - 'a'.charCodeAt(0);
+            if (idx >= 0 && idx < options.length) return options[idx];
+            // Also try options that start with the letter
+            const startMatch = options.find(o => this.normalizeLabel(o).startsWith(letter));
+            if (startMatch) return startMatch;
+          }
+          // 4) Common yes/no mapping
+          if (["yes","y"].includes(normAns)) {
+            const yesOpt = options.find(o => this.normalizeLabel(o) === 'yes' || this.normalizeLabel(o).startsWith('yes'));
+            if (yesOpt) return yesOpt;
+          }
+          if (["no","n"].includes(normAns)) {
+            const noOpt = options.find(o => this.normalizeLabel(o) === 'no' || this.normalizeLabel(o).startsWith('no'));
+            if (noOpt) return noOpt;
+          }
+          return null;
+        }
+
+        mapChoicesToOptions(answers, options) {
+          const results = [];
+          const used = new Set();
+          for (const a of answers) {
+            const m = this.mapChoiceToOption(a, options);
+            if (m && !used.has(m)) { results.push(m); used.add(m); }
+          }
+          return results;
         }
 
         fillAnswerIntoDOM(question, text) {
@@ -1455,8 +1757,14 @@ class FloatingAccessibilityTools {
           for (const c of candidates) {
             const text = (c.getAttribute('aria-label') || c.textContent || '').trim().toLowerCase();
             if (text === labelLower) return c;
+            // Match by digits-only equivalence (e.g., years)
+            const digitsC = (text.match(/\d+/g) || []).join('');
+            const digitsL = (labelLower.match(/\d+/g) || []).join('');
+            if (digitsC && digitsL && digitsC === digitsL) return c;
             const parentText = (c.closest('[role]') || c.parentElement)?.textContent?.trim()?.toLowerCase() || '';
             if (parentText.includes(labelLower)) return c;
+            const digitsP = (parentText.match(/\d+/g) || []).join('');
+            if (digitsP && digitsL && digitsP === digitsL) return c;
           }
           return null;
         }
@@ -1479,86 +1787,67 @@ class FloatingAccessibilityTools {
           return false;
         }
         
-        async startAudioRecording() {
+        // Simplified dictation using Web Speech API (no audio worklets)
+        startDictation() {
           try {
-            // Import only recorder worklet; disable audio player for robustness
-            const { startAudioRecorderWorklet } = await import(chrome.runtime.getURL('js/audio/audio-recorder.js'));
-            const [recorderNode, recorderCtx, stream] = await startAudioRecorderWorklet((pcmData) => {
-              this.audioRecorderHandler(pcmData);
-            });
-            this.audioRecorderNode = recorderNode;
-            this.audioRecorderContext = recorderCtx;
-            this.micStream = stream;
-            
-          // Update UI
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+              this.addSystemMessage('Speech Recognition not supported in this browser.', 'error');
+              return;
+            }
+            if (!this.recognition) {
+              this.recognition = new SpeechRecognition();
+              this.recognition.lang = 'en-US';
+              this.recognition.continuous = true;
+              this.recognition.interimResults = true;
+              this.recognition.onresult = (event) => {
+                let finalTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                  const res = event.results[i];
+                  if (res.isFinal) {
+                    finalTranscript += res[0].transcript;
+                  }
+                }
+                if (finalTranscript.trim()) {
+                  // Treat speech as typed text
+                  this.handleUserText(finalTranscript.trim());
+                }
+              };
+              this.recognition.onerror = (e) => {
+                this.addSystemMessage(`STT error: ${e.error || 'unknown'}`, 'error');
+              };
+              this.recognition.onend = () => {
+                this.isRecognizing = false;
+                const startBtn = this.container ? this.container.querySelector('#start-audio-btn') : document.querySelector('#start-audio-btn');
+                const stopBtn = this.container ? this.container.querySelector('#stop-audio-btn') : document.querySelector('#stop-audio-btn');
+                if (startBtn) startBtn.style.display = 'inline-block';
+                if (stopBtn) stopBtn.style.display = 'none';
+                this.addSystemMessage('Dictation stopped', 'info');
+              };
+            }
+            if (this.isRecognizing) return;
+            this.isRecognizing = true;
+            this.recognition.start();
+            const startBtn = this.container ? this.container.querySelector('#start-audio-btn') : document.querySelector('#start-audio-btn');
+            const stopBtn = this.container ? this.container.querySelector('#stop-audio-btn') : document.querySelector('#stop-audio-btn');
+            if (startBtn) startBtn.style.display = 'none';
+            if (stopBtn) stopBtn.style.display = 'inline-block';
+            this.addSystemMessage('Listening…', 'success');
+          } catch (error) {
+            this.addSystemMessage(`Dictation error: ${error.message}`, 'error');
+          }
+        }
+
+        stopDictation() {
+          try {
+            if (this.recognition && this.isRecognizing) {
+              this.recognition.stop();
+            }
+          } catch (_) {}
           const startBtn = this.container ? this.container.querySelector('#start-audio-btn') : document.querySelector('#start-audio-btn');
           const stopBtn = this.container ? this.container.querySelector('#stop-audio-btn') : document.querySelector('#stop-audio-btn');
-          if (startBtn) startBtn.style.display = 'none';
-          if (stopBtn) stopBtn.style.display = 'inline-block';
-            this.addSystemMessage('Audio recording started', 'success');
-            
-          } catch (error) {
-            this.addSystemMessage(`Audio error: ${error.message}`, 'error');
-          }
-        }
-        
-        stopAudioRecording() {
-          if (this.bufferTimer) {
-            clearInterval(this.bufferTimer);
-            this.bufferTimer = null;
-          }
-          
-          if (this.audioBuffer.length > 0) {
-            this.sendBufferedAudio();
-          }
-          
-          if (this.micStream) { this.micStream.getTracks().forEach(track => track.stop()); }
-          
-        // Update UI
-        const startBtn = this.container ? this.container.querySelector('#start-audio-btn') : document.querySelector('#start-audio-btn');
-        const stopBtn = this.container ? this.container.querySelector('#stop-audio-btn') : document.querySelector('#stop-audio-btn');
-        if (startBtn) startBtn.style.display = 'inline-block';
-        if (stopBtn) stopBtn.style.display = 'none';
-          this.addSystemMessage('Audio recording stopped', 'info');
-        }
-        
-        audioRecorderHandler(pcmData) {
-          this.audioBuffer.push(new Uint8Array(pcmData));
-          
-          if (!this.bufferTimer) {
-            this.bufferTimer = setInterval(() => this.sendBufferedAudio(), 200);
-          }
-        }
-        
-        async sendBufferedAudio() {
-          if (this.audioBuffer.length === 0) return;
-          
-          let totalLength = 0;
-          for (const chunk of this.audioBuffer) {
-            totalLength += chunk.length;
-          }
-          
-          const combinedBuffer = new Uint8Array(totalLength);
-          let offset = 0;
-          for (const chunk of this.audioBuffer) {
-            combinedBuffer.set(chunk, offset);
-            offset += chunk.length;
-          }
-          
-          try {
-            await this.fetchWithRetry(`http://localhost:8000/send/${this.sessionId}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                mime_type: "audio/pcm",
-                data: this.arrayBufferToBase64(combinedBuffer.buffer)
-              })
-            });
-        } catch (error) {
-          this.addSystemMessage(`Audio send error: ${error.message}`, 'error');
-        }
-          
-          this.audioBuffer = [];
+          if (startBtn) startBtn.style.display = 'inline-block';
+          if (stopBtn) stopBtn.style.display = 'none';
         }
         
         toggleMode() {
@@ -1575,6 +1864,9 @@ class FloatingAccessibilityTools {
             textMode.style.display = 'block';
             audioMode.style.display = 'none';
             toggleBtn.textContent = 'Switch to Audio Mode';
+            // Stop dictation
+            
+            try { this.stopDictation(); } catch (_) {}
           }
           
           // Reconnect SSE with new mode
@@ -1583,6 +1875,12 @@ class FloatingAccessibilityTools {
           }
           this.connectSSE();
         }
+
+        // (TTS helpers removed)
+        speakText() {}
+        cancelSpeech() {}
+
+        base64ToArrayBuffer() { return new ArrayBuffer(0); }
         
         addChatMessage(text, sender = 'agent', id = null) {
           if (!this.container) {
@@ -1677,6 +1975,8 @@ class FloatingAccessibilityTools {
           }
           return bytes.buffer;
         }
+
+        async playServerTTS() { throw new Error('TTS disabled'); }
         
         arrayBufferToBase64(buffer) {
           let binary = "";
@@ -2215,10 +2515,8 @@ class FloatingAccessibilityTools {
                 <div id="search-text-mode">
                   <div style="display: flex; gap: 8px; margin-bottom: 2px;">
                     <input type="text" id="search-text-input" placeholder="Ask a question about this webpage..." 
-                           style="flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 20px; font-size: 14px; height: 40px; outline: none; transition: border-color 0.2s;"
-                           onfocus="this.style.borderColor='#667eea'" onblur="this.style.borderColor='#ddd'">
-                    <button class="button" id="send-search-btn" style="padding: 8px 0px; border-radius: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; color: white; font-size: 16px; cursor: pointer; transition: transform 0.2s; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; margin: 0px;" 
-                            onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">↵</button>
+                           style="flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 20px; font-size: 14px; height: 40px; outline: none; transition: border-color 0.2s;">
+                    <button class="button" id="send-search-btn" style="padding: 8px 0px; border-radius: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; color: white; font-size: 16px; cursor: pointer; transition: transform 0.2s; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; margin: 0px;">↵</button>
                   </div>
                 </div>
                 

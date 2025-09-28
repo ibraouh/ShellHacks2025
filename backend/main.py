@@ -18,6 +18,7 @@ from google.adk.agents import LiveRequestQueue
 from google.adk.agents.run_config import RunConfig
 from google.genai import types
 from google.genai.types import Part, Content, Blob
+from google import genai
 
 # Import all tools
 from tools.speech_to_instructions import SpeechToInstructionsTool, SpeechToInstructionsRequest
@@ -27,7 +28,7 @@ from tools.semantic_search import SemanticSearchTool, SemanticSearchRequest
 from tools.text_simplification import TextSimplificationTool, TextSimplificationRequest
 
 # Import agents
-from agents.speech_commands_agent import speech_commands_agent
+from agents.speech_commands_agent import speech_commands_agent, form_interpreter_agent
 from agents.website_search_agent import website_search_agent
 
 app = FastAPI(title="Accessibility Tools API", version="1.0.0")
@@ -98,10 +99,12 @@ async def start_agent_session(user_id):
         user_id=user_id,
     )
 
-    # Force text-only modality for robustness
+    # Text responses with input audio transcription enabled (audio modality disabled for stability)
     run_config = RunConfig(
         response_modalities=[types.Modality.TEXT],
         session_resumption=types.SessionResumptionConfig(),
+        input_audio_transcription=types.AudioTranscriptionConfig(),
+        output_audio_transcription=types.AudioTranscriptionConfig(),
     )
 
     # Create a LiveRequestQueue for this session
@@ -166,7 +169,7 @@ async def agent_to_client_sse(live_events):
         if not part:
             continue
 
-    # If it's text, send it only when complete (not partial)
+        # If it's text, send it only when complete (not partial)
         if part.text and not event.partial:
             message = {
                 "mime_type": "text/plain",
@@ -350,6 +353,145 @@ async def search_send_message_endpoint(user_id: str, request: Request):
     return {"status": "sent"}
 
 # =============================================================================
+# FORM ANSWER INTERPRETATION ENDPOINT
+# =============================================================================
+
+@app.post("/form/interpret")
+async def interpret_form_answer(request: Request):
+    """Use ADK agent to interpret a natural-language answer into structured action JSON."""
+    try:
+        payload = await request.json()
+        question = payload.get("question")
+        qtype = payload.get("type")
+        options = payload.get("options", [])
+        user_text = payload.get("user_text")
+        context = payload.get("context", {})
+
+        if not question or not qtype or user_text is None:
+            raise HTTPException(status_code=400, detail="Missing required fields: question, type, user_text")
+
+        system_preamble = (
+            "You are a form interpreter. Convert user_text into strict JSON. "
+            + "Question type: " + str(qtype) + ". "
+            + "Options: " + ", ".join(options) + ". "
+            + "Question: " + str(question)
+        )
+
+        # Use direct Gemini client for a simple one-shot generation
+        client = genai.Client()
+        prompt = (
+            system_preamble
+            + "\nReturn ONLY a single-line JSON. Do not add prose.\n"
+            + f"User payload: {json.dumps({'question': question, 'type': qtype, 'options': options, 'user_text': user_text, 'context': context})}"
+            + "\nIf type is text/long_text, output {\"action\":\"set_text\",\"normalized_text\":\"...\",\"confidence\":0.0-1.0}.\n"
+            + "If type is radio/dropdown, output {\"action\":\"select\",\"choices\":[exact_option],\"confidence\":0.0-1.0} where choices[0] EXACTLY matches one of the provided options.\n"
+            + "If type is checkbox, output {\"action\":\"multi_select\",\"choices\":[exact_options...],\"confidence\":0.0-1.0} where each choice EXACTLY matches an option.\n"
+            + "For name prompts, normalized_text must be the name only, capitalized. For emails, return the email; for phone, return a tidy phone string."
+        )
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt],
+            )
+            response_text = response.text or ""
+        except Exception as e:
+            response_text = ""
+
+        try:
+            data = json.loads(response_text)
+            return {"success": True, "data": data}
+        except json.JSONDecodeError:
+            # Attempt to salvage JSON substring
+            start = response_text.find("{")
+            end = response_text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    data = json.loads(response_text[start:end+1])
+                    return {"success": True, "data": data}
+                except Exception:
+                    pass
+
+            # Backend fallback normalization for common text questions
+            def backend_fallback_normalize(q: str, qtype: str, user_txt: str):
+                ql = (q or "").lower()
+                txt = (user_txt or "").strip()
+                if qtype in ["text", "long_text"]:
+                    # Name extraction
+                    if any(k in ql for k in ["name", "your name", "full name"]):
+                        import re
+                        m = re.search(r"(?:^|\b)(?:i am|i'm|my name is|my name's|it is|it's)\s+([a-z][a-z\-\' ]{1,60})", txt, flags=re.IGNORECASE)
+                        if m and m.group(1):
+                            candidate = m.group(1).strip()
+                            candidate = re.split(r"[,.!?]", candidate)[0].strip()
+                            candidate = " ".join(w[:1].upper() + w[1:].lower() for w in candidate.split())
+                            return {"action": "set_text", "normalized_text": candidate, "confidence": 0.9}
+                        # If no pattern match, try to capitalize a single word
+                        words = [w for w in re.split(r"\s+", txt) if w]
+                        if 1 <= len(words) <= 3:
+                            candidate = " ".join(w[:1].upper() + w[1:].lower() for w in words)
+                            return {"action": "set_text", "normalized_text": candidate, "confidence": 0.7}
+                        return {"action": "set_text", "normalized_text": txt, "confidence": 0.6}
+
+                    # Email extraction
+                    if "email" in ql:
+                        import re
+                        m = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", txt, flags=re.IGNORECASE)
+                        if m:
+                            return {"action": "set_text", "normalized_text": m.group(0), "confidence": 0.9}
+                        return {"action": "set_text", "normalized_text": txt, "confidence": 0.6}
+
+                    # Phone extraction
+                    if any(k in ql for k in ["phone", "mobile", "telephone"]):
+                        import re
+                        m = re.search(r"(\+?\d[\d\s().-]{7,}\d)", txt)
+                        if m:
+                            return {"action": "set_text", "normalized_text": m.group(1).strip(), "confidence": 0.85}
+                        return {"action": "set_text", "normalized_text": txt, "confidence": 0.6}
+
+                    # Generic text fallback
+                    return {"action": "set_text", "normalized_text": txt, "confidence": 0.6}
+
+                # No fallback for choice types here
+                return None
+
+            fallback = backend_fallback_normalize(question, qtype, user_text)
+            if fallback:
+                return {"success": True, "data": fallback, "note": "backend_fallback"}
+            return {"success": False, "error": "invalid_json", "raw": response_text}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        # As a last resort, provide backend fallback normalization
+        try:
+            payload = await request.json()
+            question = payload.get("question")
+            qtype = payload.get("type")
+            user_text = payload.get("user_text")
+
+            def quick_fallback(q: str, qtype: str, user_txt: str):
+                ql = (q or "").lower()
+                txt = (user_txt or "").strip()
+                if qtype in ["text", "long_text"]:
+                    import re
+                    if any(k in ql for k in ["name", "your name", "full name"]):
+                        m = re.search(r"(?:^|\b)(?:i am|i'm|my name is|my name's|it is|it's)\s+([a-z][a-z\-\' ]{1,60})", txt, flags=re.IGNORECASE)
+                        if m and m.group(1):
+                            candidate = m.group(1).strip()
+                            candidate = re.split(r"[,.!?]", candidate)[0].strip()
+                            candidate = " ".join(w[:1].upper() + w[1:].lower() for w in candidate.split())
+                            return {"action": "set_text", "normalized_text": candidate, "confidence": 0.85}
+                    return {"action": "set_text", "normalized_text": txt, "confidence": 0.6}
+                return None
+
+            fb = quick_fallback(question, qtype, user_text)
+            if fb:
+                return {"success": True, "data": fb, "note": "backend_exception_fallback"}
+        except Exception:
+            pass
+        return {"success": False, "error": str(e)}
+
+# =============================================================================
 # EXISTING ENDPOINTS
 # =============================================================================
 
@@ -418,6 +560,7 @@ async def api_status():
         "message": "API key is configured",
         "key_prefix": api_key[:10] + "..."
     }
+
 
 if __name__ == "__main__":
     import uvicorn
