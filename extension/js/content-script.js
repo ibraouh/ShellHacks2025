@@ -11,6 +11,7 @@ class FloatingAccessibilityTools {
     this.currentTool = null;        // Currently active tool ID
     this.textSimplificationState = null; // Reference to text simplification tool state
     this.aiAltTextState = null;     // Reference to AI alt text tool state
+    this.toolInstances = {};        // Cache for tool instances to prevent recreation
     
     // ========================================================================
     // TOOL CONFIGURATION
@@ -20,7 +21,7 @@ class FloatingAccessibilityTools {
     this.tools = [
       { id: 'speech_to_instructions', name: 'Speech Commands', icon: '🎤', span: 2, description: 'Control the page with voice commands' },
       { id: 'ai_alt_text', name: 'AI Alt Text', icon: '🖼️', description: 'Generate image descriptions' },
-      { id: 'adaptive_css', name: 'CSS Adjust', icon: '🎨', description: 'Customize page appearance' },
+      { id: 'adaptive_css', name: 'Dyslexia Font', icon: '📖', description: 'Apply dyslexia-friendly font for easier reading' },
       { id: 'semantic_search', name: 'Search', icon: '🔍', description: 'Find content semantically' },
       { id: 'text_simplification', name: 'Simplify Text', icon: '📝', description: 'Make text easier to read' }
     ];
@@ -35,6 +36,34 @@ class FloatingAccessibilityTools {
     this.createFloatingUI();      // Create the floating UI elements
     this.setupMessageListener();  // Listen for messages from background script
     this.setupTextSelection();    // Setup text selection highlighting
+  }
+
+  // ==========================================================================
+  // RETRY HELPER METHODS
+  // ==========================================================================
+  
+  async fetchWithRetry(url, options = {}, maxRetries = 5) {
+    let retryDelay = 1000; // Start with 1 second delay
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch(url, options);
+        if (response.ok) {
+          return response;
+        }
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      } catch (error) {
+        console.log(`Fetch attempt ${attempt}/${maxRetries} failed:`, error.message);
+        
+        if (attempt === maxRetries) {
+          throw new Error(`Fetch failed after ${maxRetries} attempts: ${error.message}`);
+        }
+        
+        // Wait before retrying with exponential backoff
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        retryDelay = Math.min(retryDelay * 2, 30000); // Cap at 30 seconds
+      }
+    }
   }
 
   // ==========================================================================
@@ -303,6 +332,17 @@ class FloatingAccessibilityTools {
     // Setup tool-specific event listeners (handled by each tool class)
     toolInstance.setupEventListeners(toolPanel);
     
+    // Auto-activate text selection mode for text simplification tool
+    if (toolId === 'text_simplification') {
+      // Small delay to ensure the UI is fully rendered
+      setTimeout(() => {
+        const selectBtn = toolPanel.querySelector('#select-text-btn');
+        if (selectBtn && !toolInstance.isSelectingMode) {
+          toolInstance.toggleSelectionMode(toolPanel);
+        }
+      }, 100);
+    }
+    
     // Hide the tools grid and show the tool panel
     const toolsGrid = this.shadowRoot.querySelector('.tools-grid');
     if (toolsGrid) {
@@ -321,6 +361,11 @@ class FloatingAccessibilityTools {
   // ==========================================================================
   
   getInlineTool(toolId) {
+    // Return cached instance if it exists
+    if (this.toolInstances[toolId]) {
+      return this.toolInstances[toolId];
+    }
+
     const toolClasses = {
       // ========================================================================
       // SPEECH-TO-INSTRUCTIONS TOOL
@@ -454,6 +499,9 @@ class FloatingAccessibilityTools {
         this.eventSource.onopen = () => {
           console.log('SSE connection opened');
           this.addSystemMessage('Connected to speech commands', 'success');
+          // Reset retry count on successful connection
+          this.sseRetryCount = 0;
+          this.sseRetryDelay = 1000; // Reset delay to 1 second
         };
           
           this.eventSource.onmessage = (event) => {
@@ -469,8 +517,30 @@ class FloatingAccessibilityTools {
           
         this.eventSource.onerror = (event) => {
           console.error('SSE connection error:', event);
-          this.addSystemMessage('Connection lost, reconnecting...', 'error');
-          setTimeout(() => this.connectSSE(), 5000);
+          
+          // Initialize retry tracking if not already set
+          if (this.sseRetryCount === undefined) {
+            this.sseRetryCount = 0;
+            this.sseRetryDelay = 1000; // Start with 1 second delay
+          }
+          
+          this.sseRetryCount++;
+          const maxRetries = 5;
+          
+          if (this.sseRetryCount <= maxRetries) {
+            console.log(`SSE connection failed, retrying in ${this.sseRetryDelay}ms (attempt ${this.sseRetryCount}/${maxRetries})`);
+            this.addSystemMessage(`Connection lost, retrying... (${this.sseRetryCount}/${maxRetries})`, 'error');
+            
+            setTimeout(() => {
+              this.connectSSE();
+            }, this.sseRetryDelay);
+            
+            // Exponential backoff: double the delay for next retry
+            this.sseRetryDelay = Math.min(this.sseRetryDelay * 2, 30000); // Cap at 30 seconds
+          } else {
+            console.error('SSE connection failed after maximum retries, giving up');
+            this.addSystemMessage('Connection failed after multiple attempts. Please refresh the page.', 'error');
+          }
         };
         }
         
@@ -818,7 +888,7 @@ class FloatingAccessibilityTools {
         
         async sendScanResults(scanResult) {
           try {
-            const response = await fetch(`http://localhost:8000/send/${this.sessionId}`, {
+            const response = await this.fetchWithRetry(`http://localhost:8000/send/${this.sessionId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -961,7 +1031,7 @@ class FloatingAccessibilityTools {
             await new Promise(resolve => setTimeout(resolve, 500));
             
             // Then send the user's command
-            const response = await fetch(`http://localhost:8000/send/${this.sessionId}`, {
+            const response = await this.fetchWithRetry(`http://localhost:8000/send/${this.sessionId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -1055,7 +1125,7 @@ class FloatingAccessibilityTools {
           }
           
           try {
-            await fetch(`http://localhost:8000/send/${this.sessionId}`, {
+            await this.fetchWithRetry(`http://localhost:8000/send/${this.sessionId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -1208,6 +1278,30 @@ class FloatingAccessibilityTools {
           this.selectedImage = null;
           this.isSelectingMode = false;
           this.originalCursor = null;
+        }
+
+        async fetchWithRetry(url, options = {}, maxRetries = 5) {
+          let retryDelay = 1000; // Start with 1 second delay
+          
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              const response = await fetch(url, options);
+              if (response.ok) {
+                return response;
+              }
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            } catch (error) {
+              console.log(`Fetch attempt ${attempt}/${maxRetries} failed:`, error.message);
+              
+              if (attempt === maxRetries) {
+                throw new Error(`Fetch failed after ${maxRetries} attempts: ${error.message}`);
+              }
+              
+              // Wait before retrying with exponential backoff
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              retryDelay = Math.min(retryDelay * 2, 30000); // Cap at 30 seconds
+            }
+          }
         }
         
         getContent() {
@@ -1440,7 +1534,7 @@ class FloatingAccessibilityTools {
           resultDiv.className = 'result loading';
           
           try {
-            const response = await fetch('http://localhost:8000/tools/ai_alt_text/process', {
+            const response = await this.fetchWithRetry('http://localhost:8000/tools/ai_alt_text/process', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
@@ -1460,51 +1554,98 @@ class FloatingAccessibilityTools {
         }
       },
       // ========================================================================
-      // ADAPTIVE CSS TOOL
+      // DYSLEXIA FONT TOOL
       // ========================================================================
-      'adaptive_css': class AdaptiveCSSTool {
+      'adaptive_css': class DyslexiaFontTool {
         constructor() {
           this.toolId = 'adaptive_css';
-          this.name = 'CSS Adjust';
-          this.icon = '🎨';
+          this.name = 'Dyslexia Font';
+          this.icon = '📖';
         }
         
         getContent() {
           return `
             <div class="tool-content">
-              <div style="text-align: center; padding: 40px 20px;">
-                <div style="font-size: 48px; margin-bottom: 16px;">${this.icon}</div>
-                <div style="font-size: 16px; margin-bottom: 20px;">${this.name}</div>
-                <button class="button" id="test-api-btn">Make dyslexic-friendly font</button>
-                <div id="api-result" class="result" style="margin-top: 20px;"></div>
+              <div style="padding: 20px;">
+              
+                <div style="margin-bottom: 20px; padding: 16px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #007bff;">
+                  <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #495057;">
+                    <strong>OpenDyslexic</strong> is a font designed specifically for people with dyslexia. 
+                    It uses unique letter shapes with heavier bottom portions to prevent letter rotation, 
+                    making text easier to read. The font helps reduce common reading errors and improves 
+                    reading speed and comprehension for users with dyslexia.
+                  </p>
+                </div>
+                
+                <div style="text-align: center; margin-bottom: 16px;">
+                  <button id="dyslexia-font-btn" class="dyslexia-font-button">
+                    <span id="font-btn-text">Enable Dyslexia Font</span>
+                  </button>
+                </div>
+                
+                <div id="font-status" class="result" style="margin-top: 12px; font-size: 13px;"></div>
               </div>
             </div>
           `;
         }
         
         setupEventListeners(container) {
-          const testBtn = container.querySelector('#test-api-btn');
-          const resultDiv = container.querySelector('#api-result');
-          testBtn.addEventListener('click', async () => {
-            await this.testAPI(resultDiv, testBtn);
+          const button = container.querySelector('#dyslexia-font-btn');
+          const buttonText = container.querySelector('#font-btn-text');
+          const statusDiv = container.querySelector('#font-status');
+          
+          // Check if font is already applied on page load
+          const isFontApplied = document.getElementById('dyslexic-font-styles') !== null;
+          this.updateButtonState(button, buttonText, isFontApplied);
+          this.updateStatus(statusDiv, isFontApplied);
+          
+          button.addEventListener('click', async () => {
+            await this.handleButtonClick(button, buttonText, statusDiv);
           });
         }
         
-        async testAPI(resultDiv, button) {
+        async handleButtonClick(button, buttonText, statusDiv) {
           button.disabled = true;
-          resultDiv.textContent = 'Applying dyslexic-friendly font...';
-          resultDiv.className = 'result loading';
           
           try {
-            // Apply dyslexic-friendly font to the entire page
-            this.applyDyslexicFont();
-            resultDiv.textContent = 'Dyslexic-friendly font applied successfully! The page now uses OpenDyslexic font.';
-            resultDiv.className = 'result success';
+            const isCurrentlyApplied = document.getElementById('dyslexic-font-styles') !== null;
+            
+            if (isCurrentlyApplied) {
+              // Remove dyslexia-friendly font
+              this.removeDyslexicFont();
+              this.updateButtonState(button, buttonText, false);
+              this.updateStatus(statusDiv, false);
+            } else {
+              // Apply dyslexia-friendly font
+              this.applyDyslexicFont();
+              this.updateButtonState(button, buttonText, true);
+              this.updateStatus(statusDiv, true);
+            }
           } catch (error) {
-            resultDiv.textContent = `Error applying font: ${error.message}`;
-            resultDiv.className = 'result error';
+            statusDiv.textContent = `Error: ${error.message}`;
+            statusDiv.className = 'result error';
           } finally {
             button.disabled = false;
+          }
+        }
+        
+        updateButtonState(button, buttonText, isApplied) {
+          if (isApplied) {
+            button.className = 'dyslexia-font-button active';
+            buttonText.textContent = 'Disable Dyslexia Font';
+          } else {
+            button.className = 'dyslexia-font-button';
+            buttonText.textContent = 'Enable Dyslexia Font';
+          }
+        }
+        
+        updateStatus(statusDiv, isApplied) {
+          if (isApplied) {
+            statusDiv.textContent = '✓ Dyslexia-friendly font is active';
+            statusDiv.className = 'result success';
+          } else {
+            statusDiv.textContent = 'Dyslexia-friendly font is disabled';
+            statusDiv.className = 'result';
           }
         }
         
@@ -1565,6 +1706,15 @@ class FloatingAccessibilityTools {
           
           console.log('Dyslexic-friendly font (OpenDyslexic) applied to the page');
         }
+        
+        removeDyslexicFont() {
+          // Remove the font styles element
+          const fontStyles = document.getElementById('dyslexic-font-styles');
+          if (fontStyles) {
+            fontStyles.remove();
+            console.log('Dyslexia-friendly font removed from the page');
+          }
+        }
       },
       // ========================================================================
       // WEBSITE SEARCH TOOL
@@ -1581,6 +1731,30 @@ class FloatingAccessibilityTools {
           this.container = null;
           this.websiteContent = null;
           this.isContentExtracted = false;
+        }
+
+        async fetchWithRetry(url, options = {}, maxRetries = 5) {
+          let retryDelay = 1000; // Start with 1 second delay
+          
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              const response = await fetch(url, options);
+              if (response.ok) {
+                return response;
+              }
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            } catch (error) {
+              console.log(`Fetch attempt ${attempt}/${maxRetries} failed:`, error.message);
+              
+              if (attempt === maxRetries) {
+                throw new Error(`Fetch failed after ${maxRetries} attempts: ${error.message}`);
+              }
+              
+              // Wait before retrying with exponential backoff
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              retryDelay = Math.min(retryDelay * 2, 30000); // Cap at 30 seconds
+            }
+          }
         }
         
         getContent() {
@@ -1666,6 +1840,9 @@ class FloatingAccessibilityTools {
           this.eventSource.onopen = () => {
             console.log('Search SSE connection opened');
             this.updateStatus('Connected to search agent', 'success');
+            // Reset retry count on successful connection
+            this.searchSseRetryCount = 0;
+            this.searchSseRetryDelay = 1000; // Reset delay to 1 second
           };
           
           this.eventSource.onmessage = (event) => {
@@ -1681,8 +1858,30 @@ class FloatingAccessibilityTools {
           
           this.eventSource.onerror = (event) => {
             console.error('Search SSE connection error:', event);
-            this.updateStatus('Connection lost, reconnecting...', 'error');
-            setTimeout(() => this.connectSSE(), 5000);
+            
+            // Initialize retry tracking if not already set
+            if (this.searchSseRetryCount === undefined) {
+              this.searchSseRetryCount = 0;
+              this.searchSseRetryDelay = 1000; // Start with 1 second delay
+            }
+            
+            this.searchSseRetryCount++;
+            const maxRetries = 5;
+            
+            if (this.searchSseRetryCount <= maxRetries) {
+              console.log(`Search SSE connection failed, retrying in ${this.searchSseRetryDelay}ms (attempt ${this.searchSseRetryCount}/${maxRetries})`);
+              this.updateStatus(`Connection lost, retrying... (${this.searchSseRetryCount}/${maxRetries})`, 'error');
+              
+              setTimeout(() => {
+                this.connectSSE();
+              }, this.searchSseRetryDelay);
+              
+              // Exponential backoff: double the delay for next retry
+              this.searchSseRetryDelay = Math.min(this.searchSseRetryDelay * 2, 30000); // Cap at 30 seconds
+            } else {
+              console.error('Search SSE connection failed after maximum retries, giving up');
+              this.updateStatus('Connection failed after multiple attempts. Please refresh the page.', 'error');
+            }
           };
         }
         
@@ -1856,7 +2055,7 @@ class FloatingAccessibilityTools {
             
             console.log('Sending website content to agent (text only):', contentData.length, 'characters');
             
-            const response = await fetch(`http://localhost:8000/search/send/${this.sessionId}`, {
+            const response = await this.fetchWithRetry(`http://localhost:8000/search/send/${this.sessionId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -1881,7 +2080,7 @@ class FloatingAccessibilityTools {
             this.addChatMessage(text, 'user');
             this.updateStatus('Searching...', 'loading');
             
-            const response = await fetch(`http://localhost:8000/search/send/${this.sessionId}`, {
+            const response = await this.fetchWithRetry(`http://localhost:8000/search/send/${this.sessionId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -1989,6 +2188,31 @@ class FloatingAccessibilityTools {
           this.originalCursor = null;
           this.simplificationType = 'general';
           this.readingLevel = 'adult_basic';
+          this.summarize = false;
+        }
+
+        async fetchWithRetry(url, options = {}, maxRetries = 5) {
+          let retryDelay = 1000; // Start with 1 second delay
+          
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              const response = await fetch(url, options);
+              if (response.ok) {
+                return response;
+              }
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            } catch (error) {
+              console.log(`Fetch attempt ${attempt}/${maxRetries} failed:`, error.message);
+              
+              if (attempt === maxRetries) {
+                throw new Error(`Fetch failed after ${maxRetries} attempts: ${error.message}`);
+              }
+              
+              // Wait before retrying with exponential backoff
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              retryDelay = Math.min(retryDelay * 2, 30000); // Cap at 30 seconds
+            }
+          }
         }
         
         getContent() {
@@ -2011,6 +2235,7 @@ class FloatingAccessibilityTools {
                     <option value="accessibility">Accessibility Focused</option>
                     <option value="dyslexia">Dyslexia Friendly</option>
                     <option value="screen_reader">Screen Reader Optimized</option>
+                    <option value="bullet_list">Format as Bullet List Items</option>
                   </select>
                 </div>
                 
@@ -2024,6 +2249,13 @@ class FloatingAccessibilityTools {
                   </select>
                 </div>
                 
+                <div style="margin-bottom: 20px;">
+                  <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                    <input type="checkbox" id="summarize-checkbox" style="margin-right: 8px;">
+                    <span style="font-weight: bold;">Summarize content</span>
+                  </label>
+                </div>
+                
                 <div id="selected-text-info" style="display: none; margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 8px;">
                   <div style="font-weight: bold; margin-bottom: 10px;">Selected Text:</div>
                   <div id="text-preview" style="font-size: 12px; color: #666; max-height: 100px; overflow-y: auto; border: 1px solid #ddd; padding: 8px; background: white; border-radius: 4px;"></div>
@@ -2033,9 +2265,6 @@ class FloatingAccessibilityTools {
                   <button class="button" id="simplify-text-btn" disabled style="width: 100%; margin-bottom: 10px;">
                     Simplify Selected Text
                   </button>
-                  <div id="simplify-status" style="font-size: 12px; color: #666; text-align: center;">
-                    Simplify the selected text using AI
-                  </div>
                 </div>
                 
               </div>
@@ -2048,6 +2277,7 @@ class FloatingAccessibilityTools {
           const simplifyBtn = container.querySelector('#simplify-text-btn');
           const simplificationTypeSelect = container.querySelector('#simplification-type');
           const readingLevelSelect = container.querySelector('#reading-level');
+          const summarizeCheckbox = container.querySelector('#summarize-checkbox');
           
           selectBtn.addEventListener('click', () => {
             this.toggleSelectionMode(container);
@@ -2063,6 +2293,10 @@ class FloatingAccessibilityTools {
           
           readingLevelSelect.addEventListener('change', (e) => {
             this.readingLevel = e.target.value;
+          });
+          
+          summarizeCheckbox.addEventListener('change', (e) => {
+            this.summarize = e.target.checked;
           });
           
           // Add global event listeners for text selection
@@ -2323,16 +2557,18 @@ class FloatingAccessibilityTools {
             console.log('Sending request to API:', {
               text: this.selectedText.text,
               simplification_type: this.simplificationType,
-              reading_level: this.readingLevel
+              reading_level: this.readingLevel,
+              summarize: this.summarize
             });
             
-            const response = await fetch('http://localhost:8000/tools/text_simplification/process', {
+            const response = await this.fetchWithRetry('http://localhost:8000/tools/text_simplification/process', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
                 text: this.selectedText.text,
                 simplification_type: this.simplificationType,
-                reading_level: this.readingLevel
+                reading_level: this.readingLevel,
+                summarize: this.summarize
               })
             });
             
@@ -2366,7 +2602,21 @@ class FloatingAccessibilityTools {
             
             // Create the text element
             const newElement = document.createElement(this.selectedText.tagName);
-            newElement.innerHTML = simplifiedText;
+            
+            // Convert bullet points to proper HTML formatting
+            let formattedText = simplifiedText;
+            if (this.simplificationType === 'bullet_list') {
+              // Convert bullet points to HTML list format
+              formattedText = simplifiedText
+                .replace(/\n•\s*/g, '<br>• ') // Convert line breaks + bullet to HTML
+                .replace(/^•\s*/, '• ') // Ensure first bullet point is properly formatted
+                .replace(/\n/g, '<br>'); // Convert any remaining line breaks
+            } else {
+              // For other types, preserve line breaks
+              formattedText = simplifiedText.replace(/\n/g, '<br>');
+            }
+            
+            newElement.innerHTML = formattedText;
             
             // Copy all attributes from the original element
             Array.from(this.selectedText.element.attributes).forEach(attr => {
@@ -2398,7 +2648,15 @@ class FloatingAccessibilityTools {
       }
     };
 
-    return new toolClasses[toolId]();
+    // Check if tool exists
+    if (!toolClasses[toolId]) {
+      throw new Error(`Tool '${toolId}' not found`);
+    }
+
+    // Create new instance and cache it
+    const instance = new toolClasses[toolId]();
+    this.toolInstances[toolId] = instance;
+    return instance;
   }
 
   // ==========================================================================

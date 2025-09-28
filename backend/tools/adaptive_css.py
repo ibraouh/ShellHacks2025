@@ -2,7 +2,7 @@ from .base_tool import BaseTool, ToolRequest, ToolResponse
 from typing import Dict, Any, Optional
 import json
 
-class AdaptiveCSSRequest(ToolRequest):
+class DyslexiaFontRequest(ToolRequest):
     css_rules: str
     user_preferences: Optional[str] = "{}"
     
@@ -13,18 +13,18 @@ class AdaptiveCSSRequest(ToolRequest):
         except json.JSONDecodeError:
             return {}
 
-class AdaptiveCSSTool(BaseTool):
+class DyslexiaFontTool(BaseTool):
     def __init__(self):
         super().__init__(
-            name="Adaptive CSS Adjustments for Readability",
-            description="Adjust CSS for better readability based on user needs"
+            name="Dyslexia-Friendly Font Tool",
+            description="Apply OpenDyslexic font to improve readability for users with dyslexia"
         )
     
-    async def process(self, request: AdaptiveCSSRequest) -> ToolResponse:
+    async def process(self, request: DyslexiaFontRequest) -> ToolResponse:
         # Placeholder implementation - will be replaced with actual CSS processing logic
         preferences_dict = request.get_preferences_dict()
         return ToolResponse(
             success=True,
-            message="Adaptive CSS tool processed successfully",
+            message="Dyslexia-friendly font tool processed successfully",
             data={"css_rules": request.css_rules, "preferences": preferences_dict, "status": "ready_for_implementation"}
         )

@@ -1,11 +1,14 @@
 from .base_tool import BaseTool, ToolRequest, ToolResponse
 from google import genai
 import os
+import asyncio
+import time
 
 class TextSimplificationRequest(ToolRequest):
     text: str
     simplification_type: str = "general"
     reading_level: str = "middle_school"
+    summarize: bool = False
 
 class TextSimplificationTool(BaseTool):
     def __init__(self):
@@ -20,40 +23,51 @@ class TextSimplificationTool(BaseTool):
             client = genai.Client()
 
             # Generate the LLM prompt based on the request parameters
-            prompt = self._generate_llm_prompt(request.text, request.simplification_type, request.reading_level)
+            prompt = self._generate_llm_prompt(request.text, request.simplification_type, request.reading_level, request.summarize)
 
-            # Call Gemini API to simplify the text
-            try:
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[prompt],
-                )
+            # Call Gemini API to simplify the text with retry logic
+            max_retries = 5
+            retry_delay = 1  # Start with 1 second delay
+            
+            for attempt in range(max_retries):
+                try:
+                    response = client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=[prompt],
+                    )
 
-                simplified_text = response.text
+                    simplified_text = response.text
 
-                return ToolResponse(
-                    success=True,
-                    message="Text simplification completed successfully",
-                    data={
-                        "original_text": request.text,
-                        "simplified_text": simplified_text,
-                        "simplification_type": request.simplification_type,
-                        "reading_level": request.reading_level,
-                        "status": "completed"
-                    }
-                )
-            except Exception as e:
-                print(f"Error generating content with Gemini: {e}")
-                return ToolResponse(
-                    success=False,
-                    message=f"Failed to simplify text with Gemini: {str(e)}",
-                    data={
-                        "original_text": request.text,
-                        "simplification_type": request.simplification_type,
-                        "reading_level": request.reading_level,
-                        "status": "error"
-                    }
-                )
+                    return ToolResponse(
+                        success=True,
+                        message="Text simplification completed successfully",
+                        data={
+                            "original_text": request.text,
+                            "simplified_text": simplified_text,
+                            "simplification_type": request.simplification_type,
+                            "reading_level": request.reading_level,
+                            "status": "completed"
+                        }
+                    )
+                except Exception as e:
+                    print(f"Error generating content with Gemini (attempt {attempt + 1}/{max_retries}): {e}")
+                    
+                    if attempt == max_retries - 1:
+                        # Last attempt failed
+                        return ToolResponse(
+                            success=False,
+                            message=f"Failed to simplify text with Gemini after {max_retries} attempts: {str(e)}",
+                            data={
+                                "original_text": request.text,
+                                "simplification_type": request.simplification_type,
+                                "reading_level": request.reading_level,
+                                "status": "error"
+                            }
+                        )
+                    else:
+                        # Wait before retrying with exponential backoff
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
                 
         except Exception as e:
             return ToolResponse(
@@ -67,7 +81,7 @@ class TextSimplificationTool(BaseTool):
                 }
             )
     
-    def _generate_llm_prompt(self, text: str, simplification_type: str, reading_level: str) -> str:
+    def _generate_llm_prompt(self, text: str, simplification_type: str, reading_level: str, summarize: bool = False) -> str:
         """
         Generate a comprehensive LLM prompt for text simplification based on the parameters.
         This prompt will be used when integrating with an actual LLM service.
@@ -86,10 +100,15 @@ class TextSimplificationTool(BaseTool):
             "general": "Make the text easier to read and understand while preserving the original meaning and tone.",
             "accessibility": "Focus on making the text accessible for people with cognitive disabilities, learning difficulties, or attention issues. Use clear structure, simple language, and logical flow.",
             "dyslexia": "Use dyslexia-friendly formatting: short paragraphs, clear spacing, simple sentence structure, and avoid complex fonts or layouts. Break up long words and use bullet points when appropriate.",
-            "screen_reader": "Optimize for screen readers: use clear headings, descriptive language, and logical structure. Avoid complex formatting that might confuse screen reading software."
+            "screen_reader": "Optimize for screen readers: use clear headings, descriptive language, and logical structure. Avoid complex formatting that might confuse screen reading software.",
+            "bullet_list": "Format the content as bullet list items using bullet points (•). Break down the main points into clear, concise bullet points. Each bullet should be a complete thought or action item. Use parallel structure and keep bullets short and focused. Always start each point with a bullet symbol."
         }
         
         # Build the comprehensive prompt
+        summarize_instruction = ""
+        if summarize:
+            summarize_instruction = "\n3. SUMMARIZE: Create a concise summary that captures the main points and key information while reducing length significantly. Focus on the most important information and eliminate details."
+        
         prompt = f"""
 You are an expert text simplification assistant. Your task is to simplify the following text to make it more accessible and easier to understand.
 
@@ -100,9 +119,9 @@ SIMPLIFICATION REQUIREMENTS:
 
 1. READING LEVEL: {reading_level_instructions.get(reading_level, reading_level_instructions['middle_school'])}
 
-2. SIMPLIFICATION TYPE: {simplification_instructions.get(simplification_type, simplification_instructions['general'])}
+2. SIMPLIFICATION TYPE: {simplification_instructions.get(simplification_type, simplification_instructions['general'])}{summarize_instruction}
 
-3. SPECIFIC INSTRUCTIONS:
+4. SPECIFIC INSTRUCTIONS:
    - Break down complex sentences into shorter, clearer ones
    - Replace difficult words with simpler alternatives (but explain technical terms when necessary)
    - If the text is very long, consider breaking it into shorter paragraphs
@@ -111,15 +130,17 @@ SIMPLIFICATION REQUIREMENTS:
    - Preserve important facts and data
    - Use active voice when possible
    - Add transitional words to improve flow
+   - If simplification type is "bullet_list", format the entire response as bullet points using • symbol
    - If appropriate, use bullet points or numbered lists for better organization
 
-4. OUTPUT FORMAT:
+5. OUTPUT FORMAT:
    - Return only the simplified text
    - Do not include explanations or meta-commentary
    - Maintain the same general structure as the original
    - If the original had multiple paragraphs, maintain that structure
+   - If summarize is true, make the output significantly shorter than the original (aim for 50% or less of original length)
 
-5. QUALITY CHECKS:
+6. QUALITY CHECKS:
    - Ensure the simplified version is significantly easier to read
    - Verify that all important information is preserved
    - Check that the tone remains appropriate for the content
