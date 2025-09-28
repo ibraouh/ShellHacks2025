@@ -1266,6 +1266,30 @@ class FloatingAccessibilityTools {
           }
           return window.btoa(binary);
         }
+
+        async fetchWithRetry(url, options = {}, maxRetries = 5) {
+          let retryDelay = 1000; // Start with 1 second delay
+          
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              const response = await fetch(url, options);
+              if (response.ok) {
+                return response;
+              }
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            } catch (error) {
+              console.log(`Fetch attempt ${attempt}/${maxRetries} failed:`, error.message);
+              
+              if (attempt === maxRetries) {
+                throw new Error(`Fetch failed after ${maxRetries} attempts: ${error.message}`);
+              }
+              
+              // Wait before retrying with exponential backoff
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              retryDelay = Math.min(retryDelay * 2, 30000); // Cap at 30 seconds
+            }
+          }
+        }
       },
       // ========================================================================
       // AI ALT TEXT TOOL

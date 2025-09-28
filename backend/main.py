@@ -214,7 +214,27 @@ async def sse_endpoint(user_id: int, is_audio: str = "false"):
             async for data in agent_to_client_sse(live_events):
                 yield data
         except Exception as e:
+            error_msg = str(e)
             print(f"Error in SSE stream: {e}")
+            
+            # Check if it's a quota exceeded error
+            if "quota" in error_msg.lower() or "exceeded" in error_msg.lower():
+                quota_error = {
+                    "error": "quota_exceeded",
+                    "message": "Google API quota exceeded. Please check your API key limits or try again later.",
+                    "mime_type": "text/plain",
+                    "data": "Sorry, I've reached my API quota limit. Please check your Google API key settings or try again later."
+                }
+                yield f"data: {json.dumps(quota_error)}\n\n"
+            else:
+                # Generic error message
+                error_response = {
+                    "error": "connection_error", 
+                    "message": error_msg,
+                    "mime_type": "text/plain",
+                    "data": "An error occurred while processing your request. Please try again."
+                }
+                yield f"data: {json.dumps(error_response)}\n\n"
         finally:
             cleanup()
 
@@ -285,7 +305,27 @@ async def search_sse_endpoint(user_id: str):
             async for data in agent_to_client_sse(live_events):
                 yield data
         except Exception as e:
+            error_msg = str(e)
             print(f"Error in search SSE stream: {e}")
+            
+            # Check if it's a quota exceeded error
+            if "quota" in error_msg.lower() or "exceeded" in error_msg.lower():
+                quota_error = {
+                    "error": "quota_exceeded",
+                    "message": "Google API quota exceeded. Please check your API key limits or try again later.",
+                    "mime_type": "text/plain",
+                    "data": "Sorry, I've reached my API quota limit. Please check your Google API key settings or try again later."
+                }
+                yield f"data: {json.dumps(quota_error)}\n\n"
+            else:
+                # Generic error message
+                error_response = {
+                    "error": "connection_error", 
+                    "message": error_msg,
+                    "mime_type": "text/plain",
+                    "data": "An error occurred while processing your request. Please try again."
+                }
+                yield f"data: {json.dumps(error_response)}\n\n"
         finally:
             cleanup()
 
@@ -371,6 +411,29 @@ async def process_tool(tool_id: str, request_data: Dict[str, Any]):
 @app.get("/test")
 async def test_endpoint():
     return {"message": "good"}
+
+@app.get("/api-status")
+async def api_status():
+    """Check the status of the Google API key"""
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return {
+            "status": "error",
+            "message": "GOOGLE_API_KEY not found in environment variables"
+        }
+    
+    # Check if the key looks valid (basic validation)
+    if len(api_key) < 20 or not api_key.startswith("AIza"):
+        return {
+            "status": "warning", 
+            "message": "API key format appears invalid"
+        }
+    
+    return {
+        "status": "ok",
+        "message": "API key is configured",
+        "key_prefix": api_key[:10] + "..."
+    }
 
 if __name__ == "__main__":
     import uvicorn
