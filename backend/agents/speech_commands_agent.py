@@ -59,25 +59,67 @@ def scan_webpage_elements() -> str:
 
 
 def process_speech_command(command: str) -> str:
-    """Process speech commands and return appropriate actions.
+    """Process speech commands and return appropriate actions. This function MUST be called for all user inputs.
     
     Args:
         command: The speech command text to process
         
     Returns:
-        str: Natural text response for conversational commands
+        str: JSON action response that will be executed by the frontend
     """
+    import json
+    
     # Simple command processing - can be enhanced later
     command_lower = command.lower()
     
     if "click" in command_lower and "button" in command_lower:
-        return press_test_button()
+        # Extract button description from the command
+        # Look for patterns like "click the welcome button", "click welcome", etc.
+        import re
+        
+        # Try to extract button description from various patterns
+        patterns = [
+            r"click\s+(?:the\s+)?(.+?)\s+button",
+            r"click\s+(?:the\s+)?(.+?)(?:\s+button)?$",
+            r"press\s+(?:the\s+)?(.+?)\s+button",
+            r"press\s+(?:the\s+)?(.+?)(?:\s+button)?$"
+        ]
+        
+        button_description = None
+        for pattern in patterns:
+            match = re.search(pattern, command_lower)
+            if match:
+                button_description = match.group(1).strip()
+                break
+        
+        # If no specific description found, try to extract any word after "click"
+        if not button_description:
+            words = command_lower.split()
+            click_index = -1
+            for i, word in enumerate(words):
+                if word in ["click", "press"]:
+                    click_index = i
+                    break
+            
+            if click_index >= 0 and click_index + 1 < len(words):
+                # Get the next word(s) as potential button description
+                remaining_words = words[click_index + 1:]
+                # Remove common words
+                filtered_words = [w for w in remaining_words if w not in ["the", "button", "a", "an"]]
+                if filtered_words:
+                    button_description = " ".join(filtered_words)
+        
+        # Use the extracted description or fallback to a generic one
+        if button_description:
+            return json.dumps({"action": "click_button_by_description", "description": button_description})
+        else:
+            return json.dumps({"action": "click_button_by_description", "description": "button"})
     elif "search" in command_lower:
         # For search commands, we'll let the agent handle it with google_search
-        return f"I'll search for: {command}"
+        return json.dumps({"action": "speak", "text": f"I'll search for: {command}"})
     else:
         # Return natural conversational response
-        return "How can I help you interact with this webpage?"
+        return json.dumps({"action": "speak", "text": "How can I help you interact with this webpage?"})
 
 
 # Set the API key for Google services
@@ -89,40 +131,67 @@ if not api_key:
 os.environ["GOOGLE_API_KEY"] = api_key
 
 speech_commands_agent = Agent(
-    # A unique name for the agent.
     name="speech_commands_agent",
-    # The Large Language Model (LLM) that agent will use.
-    model="gemini-2.0-flash-exp", # if this model does not work, try below
-    #model="gemini-2.0-flash-live-001",
-    # A short description of the agent's purpose.
+    model="gemini-2.0-flash-exp",
     description="Agent to process speech commands and interact with webpage elements.",
-    # Instructions to set the agent's behavior.
-    instruction="""Process speech commands and provide appropriate responses or actions.
+    instruction="""
+    You are a speech command processor that returns JSON actions. You MUST return ONLY valid JSON objects.
     
-    WEBPAGE AWARENESS:
-    - ALWAYS start by using scan_webpage_elements to understand what's available on the page
-    - Use the scan results to make intelligent decisions about which elements to interact with
-    - The scan will provide you with detailed information about all clickable elements
-    - When scan results are provided, respond briefly like "3 buttons found" or "5 elements available"
+    CRITICAL RULES:
+    - NEVER return conversational text like "OK. I clicked the button."
+    - ALWAYS return pure JSON objects
+    - Extract button names from user commands
     
-    BUTTON INTERACTION:
-    - When users ask to click buttons, use the appropriate tool:
-      - Use press_test_button for generic button clicks or when no specific button is mentioned
-      - Use click_button_by_description when users specify a button type (e.g., "click submit", "press cancel", "click login button")
+    COMMAND PATTERNS:
+    - "click [button_name]" -> {"action":"click_button_by_description","description":"button_name"}
+    - "click any button" -> {"action":"speak","text":"Which button should I press?"}
+    - Other commands -> {"action":"speak","text":"How can I help you interact with this webpage?"}
     
-    - The frontend will intelligently find buttons based on text content, IDs, and other attributes
-    - Always return the exact JSON response from the tool without any modifications
+    EXAMPLES:
+    User: "click welcome button" -> {"action":"click_button_by_description","description":"welcome"}
+    User: "click the success button" -> {"action":"click_button_by_description","description":"success"}
+    User: "press cancel" -> {"action":"click_button_by_description","description":"cancel"}
+    User: "hello" -> {"action":"speak","text":"How can I help you interact with this webpage?"}
     
-    OTHER COMMANDS:
-    - Use google_search when users ask questions that require current information
-    - Use process_speech_command for general speech command processing
-    
-    RESPONSE FORMAT:
-    - Keep responses concise and natural
-    - For conversational responses, be brief and helpful
-    - For tool actions, return ONLY the JSON string without any markdown formatting, explanations, or additional text
-    - The frontend expects pure JSON for actions, but natural text for conversations
+    RETURN ONLY THE JSON OBJECT, NO OTHER TEXT.
     """,
-    # Add tools for speech command processing and web interface interaction.
-    tools=[google_search, scan_webpage_elements, press_test_button, click_button_by_description, process_speech_command],
+    tools=[scan_webpage_elements, press_test_button, click_button_by_description, process_speech_command],
+)
+
+# -----------------------------------------------------------------------------
+# ADK agent to interpret natural-language form answers into structured actions
+# -----------------------------------------------------------------------------
+form_interpreter_agent = Agent(
+    name="form_interpreter_agent",
+    model="gemini-2.0-flash-exp",
+    description="Interpret NL answers for form questions into strict JSON actions",
+    instruction="""
+    You convert a user's natural-language answer into a STRICT JSON action for form filling.
+    Always return ONLY a single-line JSON string, no markdown or extra text.
+    Supported actions by question type:
+    - text, long_text -> {"action":"set_text","normalized_text":"...","confidence":0.0-1.0}
+    - radio, dropdown -> {"action":"select","choices":["..."],"confidence":0.0-1.0}
+    - checkbox -> {"action":"multi_select","choices":["...","..."],"confidence":0.0-1.0}
+    If not confident (< 0.8) or multiple options match, return:
+    {"action":"clarify","prompt":"...","confidence":0.0-1.0}
+    Hard rules:
+    - For radio, dropdown, checkbox you MUST return select/multi_select. Do NOT return set_text.
+    - choices MUST exactly match one of the provided options for radio/checkbox/dropdown.
+    - For text, normalize and correct obvious typos but preserve meaning.
+    - For name-like answers (e.g., "what's your name?"), extract the person's name only, capitalized (e.g., "Abe").
+    - For email prompts, return a valid email format if present.
+    - For phone prompts, return digits with standard punctuation (e.g., +1 415-555-1234).
+    - Never output anything but JSON.
+    Examples:
+    User: "probably b" Options: ["Option A","Option B","Option C"]
+    -> {"action":"select","choices":["Option B"],"confidence":0.9}
+    User: "red and blue" Options: ["Red","Green","Blue"]
+    -> {"action":"multi_select","choices":["Red","Blue"],"confidence":0.92}
+    User: "the one about refunds" Options: ["Shipping","Billing","Returns"] (ambiguous)
+    -> {"action":"clarify","prompt":"Did you mean Returns?" ,"confidence":0.6}
+    User: question="What's your name?" user_text="my name's abe"
+    -> {"action":"set_text","normalized_text":"Abe","confidence":0.95}
+    User: question="Your email" user_text="you can email me at jane.doe+news@example.com"
+    -> {"action":"set_text","normalized_text":"jane.doe+news@example.com","confidence":0.93}
+    """,
 )
