@@ -22,7 +22,7 @@ from google.genai.types import Part, Content, Blob
 # Import all tools
 from tools.speech_to_instructions import SpeechToInstructionsTool, SpeechToInstructionsRequest
 from tools.ai_alt_text import AIAltTextTool, AIAltTextRequest
-from tools.adaptive_css import AdaptiveCSSTool, AdaptiveCSSRequest
+from tools.adaptive_css import DyslexiaFontTool, DyslexiaFontRequest
 from tools.semantic_search import SemanticSearchTool, SemanticSearchRequest
 from tools.text_simplification import TextSimplificationTool, TextSimplificationRequest
 
@@ -45,7 +45,7 @@ app.add_middleware(
 tools = {
     "speech_to_instructions": SpeechToInstructionsTool(),
     "ai_alt_text": AIAltTextTool(),
-    "adaptive_css": AdaptiveCSSTool(),
+    "adaptive_css": DyslexiaFontTool(),
     "semantic_search": SemanticSearchTool(),
     "text_simplification": TextSimplificationTool(),
 }
@@ -353,7 +353,7 @@ async def process_tool(tool_id: str, request_data: Dict[str, Any]):
         elif tool_id == "ai_alt_text":
             request = AIAltTextRequest(**request_data)
         elif tool_id == "adaptive_css":
-            request = AdaptiveCSSRequest(**request_data)
+            request = DyslexiaFontRequest(**request_data)
         elif tool_id == "semantic_search":
             request = SemanticSearchRequest(**request_data)
         elif tool_id == "text_simplification":

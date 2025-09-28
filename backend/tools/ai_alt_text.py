@@ -2,6 +2,7 @@ from .base_tool import BaseTool, ToolRequest, ToolResponse
 import requests
 import os
 import json
+import asyncio
 
 from google import genai
 import requests
@@ -28,25 +29,44 @@ class AIAltTextTool(BaseTool):
 
             # For image URLs, we need to fetch the image first and encode it
             # Let's use a simpler approach with the image URL directly
-            try:
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[prompt],
-                )
+            max_retries = 5
+            retry_delay = 1  # Start with 1 second delay
+            
+            for attempt in range(max_retries):
+                try:
+                    response = client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=[prompt],
+                    )
 
-                return ToolResponse(
-                    success=True,
-                    message="AI Alt Text generated successfully",
-                    data={
-                        "image_url": request.image_url,
-                        "context": request.context,
-                        "alt_text": response.text,
-                        "status": "completed"
-                    }
-                )
-            except Exception as e:
-                result = "Could not generate content with Gemini."
-                print(f"Error generating content with Gemini: {e}")
+                    return ToolResponse(
+                        success=True,
+                        message="AI Alt Text generated successfully",
+                        data={
+                            "image_url": request.image_url,
+                            "context": request.context,
+                            "alt_text": response.text,
+                            "status": "completed"
+                        }
+                    )
+                except Exception as e:
+                    print(f"Error generating content with Gemini (attempt {attempt + 1}/{max_retries}): {e}")
+                    
+                    if attempt == max_retries - 1:
+                        # Last attempt failed
+                        return ToolResponse(
+                            success=False,
+                            message=f"Failed to generate alt text with Gemini after {max_retries} attempts: {str(e)}",
+                            data={
+                                "image_url": request.image_url,
+                                "context": request.context,
+                                "status": "error"
+                            }
+                        )
+                    else:
+                        # Wait before retrying with exponential backoff
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
             
                 
         except requests.exceptions.RequestException as e:

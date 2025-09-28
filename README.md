@@ -45,7 +45,7 @@
 
 1. **Speech-to-Instructions Navigation**: Convert speech to navigation instructions
 2. **AI-Generated Alt Text for Images**: Generate descriptive alt text using AI
-3. **Adaptive CSS Adjustments for Readability**: Adjust CSS based on user preferences
+3. **Dyslexia-Friendly Font Tool**: Apply OpenDyslexic font to improve readability for users with dyslexia
 4. **Semantic Search and Content Discovery**: Find content using semantic search
 5. **Simplified Rewording of Complex Text**: Simplify complex text for better readability
 
